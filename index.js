@@ -1,4 +1,9 @@
 require("dotenv").config();
+
+// ✅ Debug: check if environment variables are set
+console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
+console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
+
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { checkResale } = require("./checker");
 const cron = require("node-cron");
