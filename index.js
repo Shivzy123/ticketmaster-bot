@@ -16,13 +16,17 @@ const client = new Client({
 
 // Event URLs mapped to dates
 const EVENT_URLS = {
-  //"https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": "Sat 18th July",
-  //"https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": "Sun 19th July",
-  //"https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": "Wed 22nd July",
-  //"https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": "Fri 24th July",
-  //"https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": "Sat 25th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": "Sat 18th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": "Sun 19th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": "Wed 22nd July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": "Fri 24th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": "Sat 25th July",
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": "Tue 28th July"
 };
+
+// 🔧 Price filtering controls
+const CHECK_COST = false; // ✅ set to true when you ONLY want tickets <= MAX_PRICE_GBP
+const MAX_PRICE_GBP = 200;
 
 let alertedEvents = {};
 let isChecking = false;
@@ -40,6 +44,18 @@ function ukTimestamp() {
   });
 }
 
+// Returns true if ANY price in the string is <= MAX_PRICE_GBP
+function hasAcceptablePrice(priceString) {
+  if (!priceString) return false;
+
+  const prices = priceString
+    .split("|")
+    .map(p => parseFloat(p.replace("£", "").trim()))
+    .filter(n => !isNaN(n));
+
+  return prices.some(price => price <= MAX_PRICE_GBP);
+}
+
 // Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(channel) {
   if (isChecking) return;
@@ -53,17 +69,29 @@ async function checkAllEvents(channel) {
         const { resale, price } = await checkResale(url);
 
         if (resale && !alertedEvents[url]) {
-          const ts = ukTimestamp();
-          await channel.send(
-            `🚨 **RESALE TICKETS DETECTED!** 🚨\n` +
-            `Event Date: ${date}\n` +
-            `Price: ${price}\n` +
-            `Time Found (UK): ${ts}\n` +
-            `${url}`
-          );
+          // ✅ Only send alert if:
+          // - CHECK_COST is false (alert for any price), OR
+          // - CHECK_COST is true AND at least one price is <= MAX_PRICE_GBP
+          const acceptable = hasAcceptablePrice(price);
 
-          alertedEvents[url] = true;
-          console.log(`Alert sent for ${date} at ${ts}`);
+          if (CHECK_COST && !acceptable) {
+            console.log(
+              `Resale found for ${date} but all prices above £${MAX_PRICE_GBP}: ${price}`
+            );
+          } else {
+            const ts = ukTimestamp();
+
+            await channel.send(
+              `🚨 **RESALE TICKETS DETECTED!** 🚨\n` +
+              `Event Date: ${date}\n` +
+              `Price: ${price}\n` +
+              `Time Found (UK): ${ts}\n` +
+              `${url}`
+            );
+
+            alertedEvents[url] = true;
+            console.log(`Alert sent for ${date} at ${ts}`);
+          }
         }
 
         if (!resale) {
