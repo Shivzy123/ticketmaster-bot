@@ -1,22 +1,32 @@
 const playwright = require("playwright");
 
 async function checkResale(url) {
-  const browser = await playwright.chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  let browser;
 
   try {
-    await page.goto(url, { waitUntil: "networkidle" });
+    // ✅ Required for many cloud/container environments
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
+
+    const page = await browser.newPage();
+
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
 
     // Check if Resale Tickets exist
-    const resaleAvailable = await page.$("text=Resale Tickets") || await page.$("text=Resale");
+    const resaleAvailable =
+      (await page.$("text=Resale Tickets")) || (await page.$("text=Resale"));
 
     if (!resaleAvailable) {
-      await browser.close();
       return { resale: false, price: null };
     }
 
     // Grab all ticket rows
-    const ticketElements = await page.$$("[data-test='ticket-row'], .ticket-row, .ticket"); // adjust selector if needed
+    const ticketElements = await page.$$(
+      "[data-test='ticket-row'], .ticket-row, .ticket"
+    );
+
     let prices = [];
 
     for (const el of ticketElements) {
@@ -25,25 +35,29 @@ async function checkResale(url) {
       // Ignore sold-out tickets
       if (text.toLowerCase().includes("sold out")) continue;
 
-      // Extract price from text
-      const match = text.match(/£\d+/g);
+      // Extract prices like £120 or £120.50
+      const match = text.match(/£\d+(?:\.\d{2})?/g);
       if (match) prices.push(...match);
     }
 
     if (prices.length === 0) {
-      await browser.close();
       return { resale: false, price: null };
     }
 
     const uniquePrices = [...new Set(prices)];
     const priceString = uniquePrices.join(" | ");
 
-    await browser.close();
     return { resale: true, price: priceString };
   } catch (err) {
     console.error("Error scraping page:", err);
-    await browser.close();
     return { resale: false, price: null };
+  } finally {
+    // ✅ Always close browser (prevents leaks + crashes)
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {}
+    }
   }
 }
 
