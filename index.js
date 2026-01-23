@@ -25,41 +25,70 @@ const EVENT_URLS = {
 };
 
 let alertedEvents = {};
+let isChecking = false;
 
-// Function to check all events
+// Format a UK timestamp like: 23 Jan 2026, 22:10:35 (UK)
+function ukTimestamp() {
+  return new Date().toLocaleString("en-GB", {
+    timeZone: "Europe/London",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+// Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(channel) {
-  console.log("Checking all events for resale tickets...");
-  for (const [url, date] of Object.entries(EVENT_URLS)) {
-    try {
-      const { resale, price } = await checkResale(url);
+  if (isChecking) return;
+  isChecking = true;
 
-      if (resale && !alertedEvents[url]) {
-        await channel.send(
-          `🚨 **RESALE TICKETS DETECTED!** 🚨\nEvent Date: ${date}\nPrice: ${price}\n${url}`
-        );
-        alertedEvents[url] = true;
-        console.log(`Alert sent for ${date}`);
-      }
+  try {
+    console.log("Checking all events for resale tickets...");
 
-      if (!resale) {
-        alertedEvents[url] = false;
-        console.log(`No resale tickets for ${date}`);
+    for (const [url, date] of Object.entries(EVENT_URLS)) {
+      try {
+        const { resale, price } = await checkResale(url);
+
+        if (resale && !alertedEvents[url]) {
+          const ts = ukTimestamp();
+          await channel.send(
+            `🚨 **RESALE TICKETS DETECTED!** 🚨\n` +
+            `Event Date: ${date}\n` +
+            `Price: ${price}\n` +
+            `Time Found (UK): ${ts}\n` +
+            `${url}`
+          );
+
+          alertedEvents[url] = true;
+          console.log(`Alert sent for ${date} at ${ts}`);
+        }
+
+        if (!resale) {
+          alertedEvents[url] = false;
+          console.log(`No resale tickets for ${date}`);
+        }
+      } catch (err) {
+        console.error(`Error checking ${date}:`, err);
       }
-    } catch (err) {
-      console.error(`Error checking ${date}:`, err);
     }
+  } finally {
+    isChecking = false;
   }
 }
 
 // Bot ready
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
+
   const channel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
     console.error("Failed to fetch Discord channel:", err);
     process.exit(1);
   });
 
-  channel.send("✅ Bot is online and monitoring all Bruno Mars London 2026 events!");
+  channel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
 
   // Immediate check on startup
   await checkAllEvents(channel);
