@@ -7,6 +7,4 @@ RUN npm ci
 
 COPY . .
 
-RUN npx playwright install chromium
-
 CMD ["npm", "start"]
