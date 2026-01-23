@@ -12,7 +12,14 @@ async function checkResale(url) {
 
     const page = await browser.newPage();
 
-    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+    // ✅ Ticketmaster often never reaches "networkidle", so use domcontentloaded
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
+
+    // ✅ Make sure the page is actually loaded before scraping
+    await page.waitForSelector("body", { timeout: 30000 });
+
+    // ✅ Small buffer for heavy JS sites like Ticketmaster
+    await page.waitForTimeout(3000);
 
     // Check if Resale Tickets exist
     const resaleAvailable =
