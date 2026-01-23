@@ -1,27 +1,50 @@
-const { chromium } = require("playwright");
+const playwright = require("playwright");
 
 async function checkResale(url) {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120"
-  });
+  const browser = await playwright.chromium.launch({ headless: true });
+  const page = await browser.newPage();
 
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+  try {
+    await page.goto(url, { waitUntil: "networkidle" });
 
-  const result = await page.evaluate(() => {
-    const bodyText = document.body.innerText.toLowerCase();
-    const resale = bodyText.includes("resale") || bodyText.includes("verified resale");
+    // Check if Resale Tickets exist
+    const resaleAvailable = await page.$("text=Resale Tickets") || await page.$("text=Resale");
 
-    let price = "Unknown price";
-    const priceElement = document.querySelector(".price-range"); // adjust selector if needed
-    if (priceElement) price = priceElement.innerText.trim();
+    if (!resaleAvailable) {
+      await browser.close();
+      return { resale: false, price: null };
+    }
 
-    return { resale, price };
-  });
+    // Grab all ticket rows
+    const ticketElements = await page.$$("[data-test='ticket-row'], .ticket-row, .ticket"); // adjust selector if needed
+    let prices = [];
 
-  await browser.close();
-  return result;
+    for (const el of ticketElements) {
+      const text = (await el.innerText()).trim();
+
+      // Ignore sold-out tickets
+      if (text.toLowerCase().includes("sold out")) continue;
+
+      // Extract price from text
+      const match = text.match(/£\d+/g);
+      if (match) prices.push(...match);
+    }
+
+    if (prices.length === 0) {
+      await browser.close();
+      return { resale: false, price: null };
+    }
+
+    const uniquePrices = [...new Set(prices)];
+    const priceString = uniquePrices.join(" | ");
+
+    await browser.close();
+    return { resale: true, price: priceString };
+  } catch (err) {
+    console.error("Error scraping page:", err);
+    await browser.close();
+    return { resale: false, price: null };
+  }
 }
 
 module.exports = { checkResale };

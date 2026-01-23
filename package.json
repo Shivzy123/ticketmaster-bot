@@ -7,10 +7,9 @@
     "postinstall": "npx playwright install"
   },
   "dependencies": {
-  "discord.js": "^14.12.1",
-  "dotenv": "^17.2.3",
-  "playwright": "^1.44.0",
-  "node-cron": "^3.0.3"
-}
-
+    "discord.js": "^14.13.0",
+    "dotenv": "^17.2.3",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.40.0"
+  }
 }
