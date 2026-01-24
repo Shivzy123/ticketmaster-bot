@@ -4,7 +4,6 @@ async function checkResale(url) {
   let browser;
 
   try {
-    // ✅ Required for many cloud/container environments
     browser = await playwright.chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -12,58 +11,44 @@ async function checkResale(url) {
 
     const page = await browser.newPage();
 
-    // ✅ Ticketmaster often never reaches "networkidle", so use domcontentloaded
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
-
-    // ✅ Make sure the page is actually loaded before scraping
     await page.waitForSelector("body", { timeout: 30000 });
-
-    // ✅ Small buffer for heavy JS sites like Ticketmaster
     await page.waitForTimeout(3000);
 
-    // Check if Resale Tickets exist
-    const resaleAvailable =
-      (await page.$("text=Resale Tickets")) || (await page.$("text=Resale"));
-
-    if (!resaleAvailable) {
-      return { resale: false, price: null };
-    }
-
-    // Grab all ticket rows
-    const ticketElements = await page.$$(
-      "[data-test='ticket-row'], .ticket-row, .ticket"
+    // ✅ If a cookie banner exists, try to accept (won’t crash if not found)
+    const acceptBtn = page.locator(
+      "button:has-text('Accept'), button:has-text('Accept All'), button:has-text('I Accept')"
     );
-
-    let prices = [];
-
-    for (const el of ticketElements) {
-      const text = (await el.innerText()).trim();
-
-      // Ignore sold-out tickets
-      if (text.toLowerCase().includes("sold out")) continue;
-
-      // Extract prices like £120 or £120.50
-      const match = text.match(/£\d+(?:\.\d{2})?/g);
-      if (match) prices.push(...match);
+    if (await acceptBtn.count()) {
+      try { await acceptBtn.first().click({ timeout: 3000 }); } catch {}
     }
 
-    if (prices.length === 0) {
-      return { resale: false, price: null };
+    // ✅ Grab full visible text (Ticketmaster markup changes a lot)
+    const bodyText = await page.locator("body").innerText();
+
+    // ✅ Resale detection: Ticketmaster commonly uses "Verified Resale Ticket"
+    const hasResale =
+      /Verified Resale Ticket/i.test(bodyText) ||
+      /\bResale\b/i.test(bodyText);
+
+    if (!hasResale) return { resale: false, price: null };
+
+    // ✅ Extract prices like £563.22 from the whole page text
+    const matches = bodyText.match(/£\d+(?:\.\d{2})?/g) || [];
+    const uniquePrices = [...new Set(matches)];
+
+    if (uniquePrices.length === 0) {
+      // Resale text exists but no prices extracted
+      return { resale: true, price: "Price not detected" };
     }
 
-    const uniquePrices = [...new Set(prices)];
-    const priceString = uniquePrices.join(" | ");
-
-    return { resale: true, price: priceString };
+    return { resale: true, price: uniquePrices.join(" | ") };
   } catch (err) {
     console.error("Error scraping page:", err);
     return { resale: false, price: null };
   } finally {
-    // ✅ Always close browser (prevents leaks + crashes)
     if (browser) {
-      try {
-        await browser.close();
-      } catch {}
+      try { await browser.close(); } catch {}
     }
   }
 }
