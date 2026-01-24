@@ -5,16 +5,23 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: offers-based checker + filters ✅");
+console.log("INDEX VERSION: offers-based checker + filters + commands + hourly logs ✅");
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { checkResale } = require("./checker");
 const cron = require("node-cron");
 
+// 🔧 Command prefix
+const COMMAND_PREFIX = "!";
+
 // Discord client
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
   partials: [Partials.Channel]
 });
 
@@ -28,15 +35,14 @@ const EVENT_URLS = {
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": "Tue 28th July"
 };
 
-// ✅ Filters (as requested)
+// ✅ Filters
 const CHECK_COST = true;
 const MAX_PRICE_GBP = 250;
 const MIN_TICKETS = 2;
 
-// small delay between event checks
 const BETWEEN_EVENTS_DELAY_MS = 2000;
 
-let alertedEvents = {}; // url -> boolean
+let alertedEvents = {};
 let isChecking = false;
 
 function ukTimestamp() {
@@ -51,13 +57,20 @@ function ukTimestamp() {
   });
 }
 
+function ukHourLabel() {
+  return new Date().toLocaleString("en-GB", {
+    timeZone: "Europe/London",
+    hour: "numeric",
+    hour12: true
+  });
+}
+
 function formatOffer(o) {
   return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
 }
 
 function qualifyOffer(o) {
   if (!o) return false;
-  if (typeof o.count !== "number" || typeof o.priceNum !== "number") return false;
   if (o.count < MIN_TICKETS) return false;
   if (CHECK_COST && o.priceNum > MAX_PRICE_GBP) return false;
   return true;
@@ -72,13 +85,9 @@ async function checkAllEvents(channel) {
 
     for (const [url, date] of Object.entries(EVENT_URLS)) {
       try {
-        const result = await checkResale(url);
-        const resale = !!result?.resale;
-        const offers = Array.isArray(result?.offers) ? result.offers : [];
-
+        const { resale, offers = [] } = await checkResale(url);
         const qualifying = offers.filter(qualifyOffer);
 
-        // ✅ Alert only when there is at least one qualifying offer
         if (resale && qualifying.length > 0) {
           if (!alertedEvents[url]) {
             const ts = ukTimestamp();
@@ -94,16 +103,12 @@ async function checkAllEvents(channel) {
 
             alertedEvents[url] = true;
             console.log(`Alert sent for ${date} at ${ts}`);
-          } else {
-            console.log(`Still matching filters for ${date} (already alerted).`);
           }
         } else {
-          // ✅ If it doesn't match filters right now, clear alert state so we can alert later
           alertedEvents[url] = false;
-
           console.log(
             resale
-              ? `Resale found but no matches for ${date} (need ${MIN_TICKETS}+ tickets and <= £${MAX_PRICE_GBP})`
+              ? `Resale found but no matches for ${date}`
               : `No resale tickets for ${date}`
           );
         }
@@ -118,21 +123,41 @@ async function checkAllEvents(channel) {
   }
 }
 
+client.on("messageCreate", async message => {
+  if (message.author.bot) return;
+  if (message.channel.id !== process.env.CHANNEL_ID) return;
+  if (!message.content.startsWith(COMMAND_PREFIX)) return;
+
+  const command = message.content.slice(1).trim().toLowerCase();
+
+  if (command === "check") {
+    if (isChecking) {
+      await message.reply("⏳ A check is already running.");
+      return;
+    }
+
+    const ts = ukTimestamp();
+    await message.reply(`🔎 **Manual check started** (${ts})`);
+    await checkAllEvents(message.channel);
+    await message.reply("✅ **Manual check completed**");
+  }
+});
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const channel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
-    console.error("Failed to fetch Discord channel:", err);
-    process.exit(1);
-  });
-
+  const channel = await client.channels.fetch(process.env.CHANNEL_ID);
   await channel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
 
-  // Run immediately on startup
   await checkAllEvents(channel);
 
-  // Every 5 minutes recommended
   cron.schedule("*/5 * * * *", async () => {
+    await checkAllEvents(channel);
+  });
+
+  cron.schedule("0 * * * *", async () => {
+    const label = ukHourLabel();
+    await channel.send(`🕰️ **${label} check**`);
     await checkAllEvents(channel);
   });
 });
