@@ -5,7 +5,7 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: offers-based checker + filters + commands + hourly logs ✅");
+console.log("INDEX VERSION: offers-based checker + filters + commands + hourly logs ✅ (with channel fetch guard + message debug)");
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
@@ -123,9 +123,15 @@ async function checkAllEvents(channel) {
   }
 }
 
-client.on("messageCreate", async message => {
+client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (message.channel.id !== process.env.CHANNEL_ID) return;
+
+  // Only respond in the configured channel
+  if (message.channel?.id !== process.env.CHANNEL_ID) return;
+
+  // 🔍 Debug to prove the bot is receiving your command
+  console.log(`[Discord] Message in channel: "${message.content}"`);
+
   if (!message.content.startsWith(COMMAND_PREFIX)) return;
 
   const command = message.content.slice(1).trim().toLowerCase();
@@ -146,7 +152,11 @@ client.on("messageCreate", async message => {
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const channel = await client.channels.fetch(process.env.CHANNEL_ID);
+  const channel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
+    console.error("Failed to fetch Discord channel. Check CHANNEL_ID and bot permissions.", err);
+    process.exit(1);
+  });
+
   await channel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
 
   await checkAllEvents(channel);
