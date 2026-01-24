@@ -9,7 +9,6 @@ function extractPricesFromLine(line) {
   return matches || [];
 }
 
-// Filters out obvious non-ticket prices (fees, handling, delivery, etc.)
 function isFeeLine(line) {
   const l = line.toLowerCase();
   return (
@@ -24,7 +23,6 @@ function isFeeLine(line) {
   );
 }
 
-// Heuristic: ticket listing lines often contain these words
 function looksLikeTicketLine(line) {
   const l = line.toLowerCase();
   return (
@@ -51,7 +49,7 @@ async function checkResale(url) {
     await page.waitForSelector("body", { timeout: 30000 });
     await page.waitForTimeout(3000);
 
-    // Try to accept cookies if a banner appears (safe if not present)
+    // Try accept cookies if present
     const acceptBtn = page.locator(
       "button:has-text('Accept'), button:has-text('Accept All'), button:has-text('I Accept')"
     );
@@ -63,44 +61,47 @@ async function checkResale(url) {
     }
 
     const bodyText = await page.locator("body").innerText();
+
     const hasResale =
-      /Verified Resale Ticket/i.test(bodyText) ||
-      /\bResale\b/i.test(bodyText);
+      /Verified Resale Ticket/i.test(bodyText) || /\bResale\b/i.test(bodyText);
 
-    if (!hasResale) return { resale: false, price: null };
+    if (!hasResale) return { resale: false, offers: [] };
 
-    // Split into lines and analyze
     const lines = bodyText
       .split("\n")
       .map(normalizeWhitespace)
       .filter(Boolean);
 
-    // Count ticket prices
+    // Count ticket prices (heuristic)
     const priceCounts = new Map();
 
     for (const line of lines) {
       if (isFeeLine(line)) continue;
       if (!looksLikeTicketLine(line)) continue;
 
-      // Only keep sensible ticket prices (avoid small fee amounts)
       const prices = extractPricesFromLine(line)
-        .map(p => ({ raw: p, num: parseFloat(p.replace("£", "")) }))
+        .map(p => ({
+          raw: p,
+          num: parseFloat(p.replace("£", ""))
+        }))
         .filter(p => !Number.isNaN(p.num))
-        .filter(p => p.num >= 20); // <— drops £3.45 etc.
+        .filter(p => p.num >= 20); // drop tiny fees like £3.45
 
       for (const p of prices) {
         priceCounts.set(p.raw, (priceCounts.get(p.raw) || 0) + 1);
       }
     }
 
-    // Fallback: if we failed to find any prices with the “ticket line” heuristic,
-    // do a wider extraction but still filter fees + small numbers.
+    // Fallback wider scan (still filtering fee lines + small prices)
     if (priceCounts.size === 0) {
       for (const line of lines) {
         if (isFeeLine(line)) continue;
 
         const prices = extractPricesFromLine(line)
-          .map(p => ({ raw: p, num: parseFloat(p.replace("£", "")) }))
+          .map(p => ({
+            raw: p,
+            num: parseFloat(p.replace("£", ""))
+          }))
           .filter(p => !Number.isNaN(p.num))
           .filter(p => p.num >= 20);
 
@@ -110,24 +111,19 @@ async function checkResale(url) {
       }
     }
 
-    if (priceCounts.size === 0) {
-      return { resale: true, price: "Resale detected (price not parsed)" };
-    }
+    const offers = [...priceCounts.entries()]
+      .map(([priceStr, count]) => ({
+        priceStr,
+        priceNum: parseFloat(priceStr.replace("£", "")),
+        count
+      }))
+      .filter(o => !Number.isNaN(o.priceNum))
+      .sort((a, b) => a.priceNum - b.priceNum);
 
-    // Format: £241.01 — 2 tickets | £563.22 — 1 ticket
-    const formatted = [...priceCounts.entries()]
-      .sort((a, b) => {
-        const na = parseFloat(a[0].replace("£", ""));
-        const nb = parseFloat(b[0].replace("£", ""));
-        return na - nb;
-      })
-      .map(([p, count]) => `${p} — ${count} ticket${count === 1 ? "" : "s"}`)
-      .join(" | ");
-
-    return { resale: true, price: formatted };
+    return { resale: true, offers };
   } catch (err) {
     console.error("Error scraping page:", err);
-    return { resale: false, price: null };
+    return { resale: false, offers: [] };
   } finally {
     if (browser) {
       try {

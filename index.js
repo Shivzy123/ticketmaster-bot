@@ -24,14 +24,14 @@ const EVENT_URLS = {
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": "Tue 28th July"
 };
 
-// 🔧 Price filtering controls
-const CHECK_COST = false; // ✅ set to true when you ONLY want tickets <= MAX_PRICE_GBP
-const MAX_PRICE_GBP = 200;
+// ✅ Filters (as requested)
+const CHECK_COST = true;      // ✅ activated
+const MAX_PRICE_GBP = 250;    // ✅ only <= 250
+const MIN_TICKETS = 2;        // ✅ only 2+ tickets
 
 let alertedEvents = {};
 let isChecking = false;
 
-// Format a UK timestamp like: 23 Jan 2026, 22:10:35 (UK)
 function ukTimestamp() {
   return new Date().toLocaleString("en-GB", {
     timeZone: "Europe/London",
@@ -44,19 +44,10 @@ function ukTimestamp() {
   });
 }
 
-// Returns true if ANY price in the string is <= MAX_PRICE_GBP
-function hasAcceptablePrice(priceString) {
-  if (!priceString) return false;
-
-  const prices = priceString
-    .split("|")
-    .map(p => parseFloat(p.replace("£", "").trim()))
-    .filter(n => !isNaN(n));
-
-  return prices.some(price => price <= MAX_PRICE_GBP);
+function formatOffer(o) {
+  return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
 }
 
-// Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(channel) {
   if (isChecking) return;
   isChecking = true;
@@ -66,48 +57,53 @@ async function checkAllEvents(channel) {
 
     for (const [url, date] of Object.entries(EVENT_URLS)) {
       try {
-        const { resale, price } = await checkResale(url);
+        const { resale, offers } = await checkResale(url);
 
-        if (resale && !alertedEvents[url]) {
-          // ✅ Only send alert if:
-          // - CHECK_COST is false (alert for any price), OR
-          // - CHECK_COST is true AND at least one price is <= MAX_PRICE_GBP
-          const acceptable = hasAcceptablePrice(price);
+        // Filter to only offers we care about (2+ tickets AND <=£250)
+        const qualifying = offers.filter(o => {
+          if (o.count < MIN_TICKETS) return false;
+          if (CHECK_COST && o.priceNum > MAX_PRICE_GBP) return false;
+          return true;
+        });
 
-          if (CHECK_COST && !acceptable) {
-            console.log(
-              `Resale found for ${date} but all prices above £${MAX_PRICE_GBP}: ${price}`
-            );
-          } else {
-            const ts = ukTimestamp();
+        if (resale && qualifying.length > 0 && !alertedEvents[url]) {
+          const ts = ukTimestamp();
+          const lines = qualifying.map(formatOffer).join(" | ");
 
-            await channel.send(
-              `🚨 **RESALE TICKETS DETECTED!** 🚨\n` +
-              `Event Date: ${date}\n` +
-              `Price: ${price}\n` +
-              `Time Found (UK): ${ts}\n` +
-              `${url}`
-            );
+          await channel.send(
+            `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
+            `Event Date: ${date}\n` +
+            `Matches: ${lines}\n` +
+            `Time Found (UK): ${ts}\n` +
+            `${url}`
+          );
 
-            alertedEvents[url] = true;
-            console.log(`Alert sent for ${date} at ${ts}`);
-          }
+          alertedEvents[url] = true;
+          console.log(`Alert sent for ${date} at ${ts}`);
         }
 
-        if (!resale) {
+        // If no qualifying offers, do NOT mark alerted (so it can alert later if prices drop / 2+ appears)
+        if (!resale || qualifying.length === 0) {
           alertedEvents[url] = false;
-          console.log(`No resale tickets for ${date}`);
+          console.log(
+            resale
+              ? `Resale found but no matches for ${date} (need ${MIN_TICKETS}+ tickets and <= £${MAX_PRICE_GBP})`
+              : `No resale tickets for ${date}`
+          );
         }
+
       } catch (err) {
         console.error(`Error checking ${date}:`, err);
       }
+
+      // Small delay between events (helps stability)
+      await new Promise(r => setTimeout(r, 2000));
     }
   } finally {
     isChecking = false;
   }
 }
 
-// Bot ready
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -118,11 +114,10 @@ client.once("ready", async () => {
 
   channel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
 
-  // Immediate check on startup
   await checkAllEvents(channel);
 
-  // Cron to check every 1 minute (change to */5 * * * * for production)
-  cron.schedule("*/1 * * * *", async () => {
+  // Every 5 minutes recommended for production. Use */1 while testing if you want.
+  cron.schedule("*/5 * * * *", async () => {
     await checkAllEvents(channel);
   });
 });
