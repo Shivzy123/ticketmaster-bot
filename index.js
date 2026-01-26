@@ -5,34 +5,41 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: offers-based checker + filters + commands + hourly logs ✅ (with channel fetch guard + message debug)");
+console.log(
+  "INDEX VERSION: offers-based checker + filters + hourly logs ✅ (NO COMMANDS)"
+);
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { checkResale } = require("./checker");
 const cron = require("node-cron");
 
-// 🔧 Command prefix
-const COMMAND_PREFIX = "!";
+// 🕰️ Channel for hourly check logs (TIME-CHECK)
+const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 
 // Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMessages
   ],
   partials: [Partials.Channel]
 });
 
 // Event URLs mapped to dates
 const EVENT_URLS = {
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": "Sat 18th July",
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": "Sun 19th July",
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": "Wed 22nd July",
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": "Fri 24th July",
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": "Sat 25th July",
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": "Tue 28th July"
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5":
+    "Sat 18th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82":
+    "Sun 19th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B":
+    "Wed 22nd July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67":
+    "Fri 24th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70":
+    "Sat 25th July",
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E":
+    "Tue 28th July"
 };
 
 // ✅ Filters
@@ -76,7 +83,8 @@ function qualifyOffer(o) {
   return true;
 }
 
-async function checkAllEvents(channel) {
+// 🔍 Core checker (alerts go ONLY to ticket channel)
+async function checkAllEvents(ticketChannel) {
   if (isChecking) return;
   isChecking = true;
 
@@ -93,12 +101,12 @@ async function checkAllEvents(channel) {
             const ts = ukTimestamp();
             const lines = qualifying.map(formatOffer).join(" | ");
 
-            await channel.send(
+            await ticketChannel.send(
               `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
-              `Event Date: ${date}\n` +
-              `Matches: ${lines}\n` +
-              `Time Found (UK): ${ts}\n` +
-              `${url}`
+                `Event Date: ${date}\n` +
+                `Matches: ${lines}\n` +
+                `Time Found (UK): ${ts}\n` +
+                `${url}`
             );
 
             alertedEvents[url] = true;
@@ -123,52 +131,36 @@ async function checkAllEvents(channel) {
   }
 }
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-
-  // Only respond in the configured channel
-  if (message.channel?.id !== process.env.CHANNEL_ID) return;
-
-  // 🔍 Debug to prove the bot is receiving your command
-  console.log(`[Discord] Message in channel: "${message.content}"`);
-
-  if (!message.content.startsWith(COMMAND_PREFIX)) return;
-
-  const command = message.content.slice(1).trim().toLowerCase();
-
-  if (command === "check") {
-    if (isChecking) {
-      await message.reply("⏳ A check is already running.");
-      return;
-    }
-
-    const ts = ukTimestamp();
-    await message.reply(`🔎 **Manual check started** (${ts})`);
-    await checkAllEvents(message.channel);
-    await message.reply("✅ **Manual check completed**");
-  }
-});
-
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const channel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
-    console.error("Failed to fetch Discord channel. Check CHANNEL_ID and bot permissions.", err);
+  // 🎟️ Ticket alerts channel
+  const ticketChannel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
+    console.error("Failed to fetch ticket channel", err);
     process.exit(1);
   });
 
-  await channel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
-
-  await checkAllEvents(channel);
-
-  cron.schedule("*/5 * * * *", async () => {
-    await checkAllEvents(channel);
+  // 🕰️ Hourly TIME-CHECK channel
+  const timeCheckChannel = await client.channels.fetch(TIME_CHECK_CHANNEL_ID).catch(err => {
+    console.error("Failed to fetch TIME-CHECK channel", err);
+    process.exit(1);
   });
 
+  await ticketChannel.send("✅ Bot is online and monitoring Bruno Mars London 2026 events!");
+
+  // Initial run
+  await checkAllEvents(ticketChannel);
+
+  // Every 5 minutes: background check
+  cron.schedule("*/5 * * * *", async () => {
+    await checkAllEvents(ticketChannel);
+  });
+
+  // Hourly: log check time ONLY in TIME-CHECK channel
   cron.schedule("0 * * * *", async () => {
     const label = ukHourLabel();
-    await channel.send(`🕰️ **${label} check**`);
-    await checkAllEvents(channel);
+    await timeCheckChannel.send(`🕰️ **${label} check**`);
+    await checkAllEvents(ticketChannel);
   });
 });
 
