@@ -30,51 +30,37 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 250
+    maxPrice: 200
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 250
+    maxPrice: 200
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 250
+    maxPrice: 200
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 250
+    maxPrice: 200
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 250
+    maxPrice: 200
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 250
-  },
-
-  // Ne-Yo — £150 max
-  "https://www.ticketmaster.co.uk/neyo-akon-nights-like-this-tour-manchester-02-05-2026/event/3700643BA9E01F08": {
-    artist: "Ne-Yo",
-    date: "Sat 2nd May",
-    location: "Manchester",
-    maxPrice: 150
-  },
-  "https://www.ticketmaster.co.uk/neyo-akon-nights-like-this-tour-london-09-05-2026/event/35006385CB08CAB1": {
-    artist: "Ne-Yo",
-    date: "Sat 9th May",
-    location: "London",
-    maxPrice: 150
+    maxPrice: 200
   }
 };
 
