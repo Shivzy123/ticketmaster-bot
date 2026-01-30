@@ -61,6 +61,13 @@ const EVENTS = {
     date: "Tue 28th July",
     location: "London",
     maxPrice: 200
+  },
+  // Ne-Yo — £150 max
+  "https://www.ticketmaster.co.uk/neyo-akon-nights-like-this-tour-manchester-02-05-2026/event/3700643BA9E01F08": {
+    artist: "Ne-Yo",
+    date: "Sat 2nd May",
+    location: "Manchester",
+    maxPrice: 150
   }
 };
 
