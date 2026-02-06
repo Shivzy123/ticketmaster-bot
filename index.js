@@ -5,7 +5,7 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: multi-artist events + per-event price caps ✅");
+console.log("INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅");
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
@@ -22,45 +22,64 @@ const client = new Client({
 });
 
 /**
- * ✅ EVENTS (multi-artist, per-event price caps)
+ * ✅ EVENTS (multi-artist, per-event price caps, optional enabledUntil)
+ * enabledUntil format: "YYYY-MM-DD" (UK date). If omitted => always enabled.
  */
-const EVENTS = {
-  // Bruno Mars — £250 max
+
+//Format
+/*
+// Bruno Mars — £200 max
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-18"
+  }
+*/
+const EVENTS = {
+  // Bruno Mars — £200 max
+  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
+    artist: "Bruno Mars",
+    date: "Sat 18th July",
+    location: "London",
+    maxPrice: 200,
+    enabledUntil: "2026-07-18"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-19"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-22"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-24"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-25"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 200
+    maxPrice: 200,
+    enabledUntil: "2026-07-28"
   }
 };
 
@@ -91,6 +110,39 @@ function ukHourLabel() {
   });
 }
 
+// ✅ Returns UK date in YYYY-MM-DD
+function ukDateYYYYMMDD() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+
+  const year = parts.find(p => p.type === "year").value;
+  const month = parts.find(p => p.type === "month").value;
+  const day = parts.find(p => p.type === "day").value;
+  return `${year}-${month}-${day}`;
+}
+
+// ✅ enabledUntil checker (inclusive): if today <= enabledUntil => enabled
+function isEventEnabled(info) {
+  if (!info) return false;
+  if (!info.enabledUntil) return true;
+
+  const today = ukDateYYYYMMDD();
+  const until = String(info.enabledUntil).trim();
+
+  // Expect "YYYY-MM-DD"
+  const valid = /^\d{4}-\d{2}-\d{2}$/.test(until);
+  if (!valid) {
+    console.log(`⚠️ enabledUntil is invalid (${until}) — treating as ENABLED`);
+    return true;
+  }
+
+  return today <= until; // inclusive
+}
+
 function formatOffer(o) {
   return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
 }
@@ -110,7 +162,13 @@ async function checkAllEvents(ticketChannel) {
     console.log("Checking all events for resale tickets...");
 
     for (const [url, info] of Object.entries(EVENTS)) {
-      const { artist, date, location, maxPrice } = info;
+      const { artist, date, location, maxPrice, enabledUntil } = info;
+
+      // ✅ Skip if past enabledUntil
+      if (!isEventEnabled(info)) {
+        console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
+        continue;
+      }
 
       try {
         const { resale, offers = [] } = await checkResale(url);
