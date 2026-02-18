@@ -1,12 +1,17 @@
 const playwright = require("playwright");
 
-function normalizeWhitespace(s) {
-  return s.replace(/\s+/g, " ").trim();
+function extractPrices(text) {
+  const matches = text.match(/£\d+(?:\.\d{2})?/g);
+  return matches || [];
 }
 
-function extractPricesFromLine(line) {
-  const matches = line.match(/£\d+(?:\.\d{2})?/g);
-  return matches || [];
+function toNum(priceStr) {
+  const n = parseFloat(String(priceStr).replace("£", ""));
+  return Number.isNaN(n) ? null : n;
+}
+
+function normalizeWhitespace(s) {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 function isFeeLine(line) {
@@ -23,15 +28,27 @@ function isFeeLine(line) {
   );
 }
 
-// ✅ Only count lines that look like RESALE listings (ignore normal "Seated Ticket" lines)
-function looksLikeTicketLine(line) {
-  const l = line.toLowerCase();
-  return (
-    l.includes("verified resale") ||
-    l.includes("resale ticket") ||
-    (l.includes("resale") &&
-      (l.includes("each") || l.includes("per ticket") || l.includes("ticket")))
+async function acceptCookies(page) {
+  const acceptBtn = page.locator(
+    "button:has-text('Accept'), button:has-text('Accept All'), button:has-text('I Accept')"
   );
+  if (await acceptBtn.count()) {
+    try {
+      await acceptBtn.first().click({ timeout: 3000 });
+      await page.waitForTimeout(800);
+    } catch {}
+  }
+}
+
+async function scrollABit(page) {
+  try {
+    for (let i = 0; i < 4; i++) {
+      await page.mouse.wheel(0, 900);
+      await page.waitForTimeout(800);
+    }
+    await page.mouse.wheel(0, -1200);
+    await page.waitForTimeout(800);
+  } catch {}
 }
 
 async function checkResale(url) {
@@ -44,79 +61,92 @@ async function checkResale(url) {
     });
 
     const page = await browser.newPage();
+    page.setDefaultTimeout(90000);
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
     await page.waitForSelector("body", { timeout: 30000 });
-    await page.waitForTimeout(3000);
 
-    // Try accept cookies if present
-    const acceptBtn = page.locator(
-      "button:has-text('Accept'), button:has-text('Accept All'), button:has-text('I Accept')"
-    );
-    if (await acceptBtn.count()) {
-      try {
-        await acceptBtn.first().click({ timeout: 3000 });
-        await page.waitForTimeout(1000);
-      } catch {}
-    }
+    await acceptCookies(page);
 
-    const bodyText = await page.locator("body").innerText();
+    // ✅ Wait until ticket/price content appears
+    await page.waitForFunction(() => {
+      const t = document.body?.innerText || "";
+      return /Verified Resale Ticket/i.test(t) || /£\d+(\.\d{2})?\s*(each|per)/i.test(t);
+    }, { timeout: 60000 }).catch(() => {});
 
+    // force lazy content
+    await scrollABit(page);
+
+    const bodyText = await page.locator("body").innerText().catch(() => "");
     const hasResale =
-      /Verified Resale Ticket/i.test(bodyText) || /\bResale\b/i.test(bodyText);
+      /Verified Resale Ticket/i.test(bodyText) ||
+      /\bResale\b/i.test(bodyText);
 
     if (!hasResale) return { resale: false, offers: [] };
 
-    const lines = bodyText
-      .split("\n")
-      .map(normalizeWhitespace)
-      .filter(Boolean);
+    // ✅ DOM-first extraction: find price nodes and read surrounding card text
+    const offersMap = new Map(); // priceStr -> count (ticket qty)
+    const priceNodes = page.locator("text=/£\\d+(?:\\.\\d{2})?\\s*(each|per)/i");
 
-    const priceCounts = new Map();
+    const pnCount = await priceNodes.count().catch(() => 0);
+    const limit = Math.min(pnCount, 60);
 
-    for (const line of lines) {
-      if (isFeeLine(line)) continue;
-      if (!looksLikeTicketLine(line)) continue;
+    for (let i = 0; i < limit; i++) {
+      const node = priceNodes.nth(i);
+      const line = normalizeWhitespace(await node.innerText().catch(() => ""));
+      if (!line) continue;
 
-      const prices = extractPricesFromLine(line)
-        .map(p => ({
-          raw: p,
-          num: parseFloat(p.replace("£", ""))
-        }))
-        .filter(p => !Number.isNaN(p.num))
-        .filter(p => p.num >= 20); // drop tiny fees like £3.45
+      // pull the first £xx.xx
+      const priceStr = extractPrices(line)[0];
+      if (!priceStr) continue;
 
-      for (const p of prices) {
-        priceCounts.set(p.raw, (priceCounts.get(p.raw) || 0) + 1);
+      const priceNum = toNum(priceStr);
+      if (priceNum == null || priceNum < 20) continue; // ignore fees like £3.45
+
+      // Try to get surrounding ticket card text (parent container)
+      let cardText = "";
+      try {
+        cardText = await node.locator("xpath=ancestor::*[self::li or self::div][1]").innerText({ timeout: 2000 });
+      } catch {
+        // fallback: nearby text
+        cardText = line;
       }
+      cardText = normalizeWhitespace(cardText);
+
+      // Detect quantity like "2 tickets" in the card
+      let qty = 1;
+      const m = cardText.match(/\b(\d+)\s*(ticket|tickets)\b/i);
+      if (m) qty = parseInt(m[1], 10);
+
+      offersMap.set(priceStr, (offersMap.get(priceStr) || 0) + qty);
     }
 
-    // Fallback wider scan (still filtering fee lines + small prices)
-    if (priceCounts.size === 0) {
+    // ✅ Fallback heuristic scan if DOM method found nothing
+    if (offersMap.size === 0) {
+      const lines = bodyText
+        .split("\n")
+        .map(normalizeWhitespace)
+        .filter(Boolean);
+
       for (const line of lines) {
         if (isFeeLine(line)) continue;
-
-        const prices = extractPricesFromLine(line)
-          .map(p => ({
-            raw: p,
-            num: parseFloat(p.replace("£", ""))
-          }))
-          .filter(p => !Number.isNaN(p.num))
-          .filter(p => p.num >= 20);
+        const prices = extractPrices(line)
+          .map(p => ({ raw: p, num: toNum(p) }))
+          .filter(p => p.num != null && p.num >= 20);
 
         for (const p of prices) {
-          priceCounts.set(p.raw, (priceCounts.get(p.raw) || 0) + 1);
+          offersMap.set(p.raw, (offersMap.get(p.raw) || 0) + 1);
         }
       }
     }
 
-    const offers = [...priceCounts.entries()]
+    const offers = [...offersMap.entries()]
       .map(([priceStr, count]) => ({
         priceStr,
-        priceNum: parseFloat(priceStr.replace("£", "")),
+        priceNum: toNum(priceStr),
         count
       }))
-      .filter(o => !Number.isNaN(o.priceNum))
+      .filter(o => o.priceNum != null)
       .sort((a, b) => a.priceNum - b.priceNum);
 
     return { resale: true, offers };
@@ -125,9 +155,7 @@ async function checkResale(url) {
     return { resale: false, offers: [] };
   } finally {
     if (browser) {
-      try {
-        await browser.close();
-      } catch {}
+      try { await browser.close(); } catch {}
     }
   }
 }

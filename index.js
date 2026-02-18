@@ -6,7 +6,7 @@ console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings) + retry+debug"
+  "INDEX VERSION: multi-artist events + per-event price caps + per-event minTickets + enabledUntil ✅ (minTickets = total listings) + retry+debug"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
@@ -31,54 +31,60 @@ const client = new Client({
 /**
  * ✅ EVENTS
  * enabledUntil format: "YYYY-MM-DD" (UK date). If enabledUntil is "" then always enabled.
+ * minTickets: minimum total qualifying listings across prices (per link)
  */
 const EVENTS = {
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-18"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-19"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-22"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-24"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-25"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 250,
+    minTickets: 2,
     enabledUntil: "2026-07-28"
   }
 };
 
-// ✅ Filters
-const MIN_TICKETS = 2; // total qualifying listings across prices
+// small delay between event checks
 const BETWEEN_EVENTS_DELAY_MS = 2000;
 
 let alertedEvents = {}; // url -> boolean
@@ -134,8 +140,11 @@ function isEventEnabled(info) {
   return today <= until;
 }
 
+// ✅ Clean output: hide single listings and say "tickets"
 function formatOffer(o) {
-  return `${o.priceStr} — ${o.count} listing${o.count === 1 ? "" : "s"}`;
+  if (!o || typeof o.count !== "number") return null;
+  if (o.count < 2) return null; // hide single listings
+  return `${o.priceStr} — ${o.count} tickets`;
 }
 
 function qualifiesByPrice(o, maxPrice) {
@@ -156,7 +165,7 @@ async function checkAllEvents(ticketChannel) {
     console.log("Checking all events for resale tickets...");
 
     for (const [url, info] of Object.entries(EVENTS)) {
-      const { artist, date, location, maxPrice, enabledUntil } = info;
+      const { artist, date, location, maxPrice, minTickets, enabledUntil } = info;
 
       if (!isEventEnabled(info)) {
         console.log(
@@ -164,6 +173,9 @@ async function checkAllEvents(ticketChannel) {
         );
         continue;
       }
+
+      // fallback if you forget to set it
+      const minTicketsForEvent = typeof minTickets === "number" ? minTickets : 2;
 
       try {
         // 1) initial attempt
@@ -184,6 +196,8 @@ async function checkAllEvents(ticketChannel) {
         }
 
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
+
+        // ✅ total qualifying listings across ALL prices (per-event threshold)
         const totalListings = qualifying.reduce(
           (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
           0
@@ -191,15 +205,21 @@ async function checkAllEvents(ticketChannel) {
 
         if (DEBUG_RESULTS) {
           console.log(
-            `[DEBUG] ${artist} (${date}) resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} alerted=${!!alertedEvents[url]}`
+            `[DEBUG] ${artist} (${date}) resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} minTickets=${minTicketsForEvent} alerted=${!!alertedEvents[url]}`
           );
           if (offers.length) console.log("[DEBUG offers]", offers);
         }
 
-        if (resale && qualifying.length > 0 && totalListings >= MIN_TICKETS) {
+        // ✅ Build the message line items with clean formatting (2+ only)
+        const lines = qualifying
+          .map(formatOffer)
+          .filter(Boolean)
+          .join(" | ");
+
+        // ✅ Post if threshold is met (per-event minTickets) AND we have something worth showing
+        if (resale && totalListings >= minTicketsForEvent && lines.length > 0) {
           if (!alertedEvents[url]) {
             const ts = ukTimestamp();
-            const lines = qualifying.map(formatOffer).join(" | ");
 
             await ticketChannel.send(
               `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
@@ -208,7 +228,6 @@ async function checkAllEvents(ticketChannel) {
                 `Event Date: ${date}\n` +
                 `Max Price: £${maxPrice}\n` +
                 `Matches: ${lines}\n` +
-                `Total qualifying listings: ${totalListings}\n` +
                 `Time Found (UK): ${ts}\n` +
                 `${url}`
             );
@@ -225,7 +244,7 @@ async function checkAllEvents(ticketChannel) {
 
           console.log(
             resale
-              ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings})`
+              ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings}, need ${minTicketsForEvent})`
               : `No resale tickets for ${artist} (${date})`
           );
         }
