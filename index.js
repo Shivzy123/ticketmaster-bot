@@ -5,7 +5,9 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings)");
+console.log(
+  "INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings)"
+);
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
@@ -71,10 +73,10 @@ const EVENTS = {
 };
 
 // ✅ Filters
-const MIN_TICKETS = 2;               // ✅ now means total qualifying listings across prices
+const MIN_TICKETS = 2; // ✅ now means total qualifying listings across prices
 const BETWEEN_EVENTS_DELAY_MS = 2000;
 
-let alertedEvents = {};
+let alertedEvents = {}; // url -> boolean
 let isChecking = false;
 
 function ukTimestamp() {
@@ -140,6 +142,7 @@ function qualifiesByPrice(o, maxPrice) {
   return o.priceNum <= maxPrice;
 }
 
+// Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(ticketChannel) {
   if (isChecking) return;
   isChecking = true;
@@ -151,7 +154,9 @@ async function checkAllEvents(ticketChannel) {
       const { artist, date, location, maxPrice, enabledUntil } = info;
 
       if (!isEventEnabled(info)) {
-        console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
+        console.log(
+          `⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`
+        );
         continue;
       }
 
@@ -162,7 +167,10 @@ async function checkAllEvents(ticketChannel) {
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
 
         // ✅ total qualifying listings across ALL prices
-        const totalListings = qualifying.reduce((sum, o) => sum + (o.count || 0), 0);
+        const totalListings = qualifying.reduce(
+          (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
+          0
+        );
 
         if (resale && qualifying.length > 0 && totalListings >= MIN_TICKETS) {
           if (!alertedEvents[url]) {
@@ -171,21 +179,26 @@ async function checkAllEvents(ticketChannel) {
 
             await ticketChannel.send(
               `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
-              `Artist: ${artist}\n` +
-              `Location: ${location}\n` +
-              `Event Date: ${date}\n` +
-              `Max Price: £${maxPrice}\n` +
-              `Matches: ${lines}\n` +
-              `Total qualifying listings: ${totalListings}\n` +
-              `Time Found (UK): ${ts}\n` +
-              `${url}`
+                `Artist: ${artist}\n` +
+                `Location: ${location}\n` +
+                `Event Date: ${date}\n` +
+                `Max Price: £${maxPrice}\n` +
+                `Matches: ${lines}\n` +
+                `Total qualifying listings: ${totalListings}\n` +
+                `Time Found (UK): ${ts}\n` +
+                `${url}`
             );
 
             alertedEvents[url] = true;
             console.log(`Alert sent for ${artist} (${date})`);
+          } else {
+            console.log(
+              `Still matching filters for ${artist} (${date}) (already alerted).`
+            );
           }
         } else {
           alertedEvents[url] = false;
+
           console.log(
             resale
               ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings})`
@@ -206,17 +219,36 @@ async function checkAllEvents(ticketChannel) {
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const ticketChannel = await client.channels.fetch(process.env.CHANNEL_ID);
-  const timeCheckChannel = await client.channels.fetch(TIME_CHECK_CHANNEL_ID);
+  const ticketChannel = await client.channels
+    .fetch(process.env.CHANNEL_ID)
+    .catch(err => {
+      console.error("Failed to fetch ticket channel. Check CHANNEL_ID.", err);
+      process.exit(1);
+    });
 
-  await ticketChannel.send("✅ Bot is online and monitoring Ticketmaster resale events!");
+  const timeCheckChannel = await client.channels
+    .fetch(TIME_CHECK_CHANNEL_ID)
+    .catch(err => {
+      console.error(
+        "Failed to fetch time-check channel. Check TIME_CHECK_CHANNEL_ID.",
+        err
+      );
+      process.exit(1);
+    });
 
+  await ticketChannel.send(
+    "✅ Bot is online and monitoring Ticketmaster resale events!"
+  );
+
+  // Run immediately on startup
   await checkAllEvents(ticketChannel);
 
+  // Every 5 minutes
   cron.schedule("*/5 * * * *", async () => {
     await checkAllEvents(ticketChannel);
   });
 
+  // Every hour
   cron.schedule("0 * * * *", async () => {
     const label = ukHourLabel();
     await timeCheckChannel.send(`🕰️ **${label} check**`);
