@@ -5,7 +5,7 @@ console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
-console.log("INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅");
+console.log("INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings)");
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
@@ -25,66 +25,53 @@ const client = new Client({
  * ✅ EVENTS (multi-artist, per-event price caps, optional enabledUntil)
  * enabledUntil format: "YYYY-MM-DD" (UK date). If enabledUntil is "" then always enabled.
  */
-
-//Format
-/*
-// Bruno Mars — £200 max
-  "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
-    artist: "Bruno Mars",
-    date: "Sat 18th July",
-    location: "London",
-    maxPrice: 200,
-    enabledUntil: "2026-07-18"
-  }
-*/
 const EVENTS = {
-  // Bruno Mars — £200 max
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-18"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-19"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-22"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-24"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-25"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 200,
+    maxPrice: 2000,
     enabledUntil: "2026-07-28"
   }
 };
 
 // ✅ Filters
-const MIN_TICKETS = 2;
+const MIN_TICKETS = 2;               // ✅ now means total qualifying listings across prices
 const BETWEEN_EVENTS_DELAY_MS = 2000;
 
 let alertedEvents = {};
@@ -128,12 +115,12 @@ function ukDateYYYYMMDD() {
 // ✅ enabledUntil checker (inclusive): if today <= enabledUntil => enabled
 function isEventEnabled(info) {
   if (!info) return false;
-  if (!info.enabledUntil) return true;
+
+  const until = String(info.enabledUntil || "").trim();
+  if (!until) return true; // ✅ empty => always enabled
 
   const today = ukDateYYYYMMDD();
-  const until = String(info.enabledUntil).trim();
 
-  // Expect "YYYY-MM-DD"
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(until);
   if (!valid) {
     console.log(`⚠️ enabledUntil is invalid (${until}) — treating as ENABLED`);
@@ -144,14 +131,13 @@ function isEventEnabled(info) {
 }
 
 function formatOffer(o) {
-  return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
+  return `${o.priceStr} — ${o.count} listing${o.count === 1 ? "" : "s"}`;
 }
 
-function qualifyOffer(o, maxPrice) {
+function qualifiesByPrice(o, maxPrice) {
   if (!o) return false;
-  if (o.count < MIN_TICKETS) return false;
-  if (o.priceNum > maxPrice) return false;
-  return true;
+  if (typeof o.priceNum !== "number" || Number.isNaN(o.priceNum)) return false;
+  return o.priceNum <= maxPrice;
 }
 
 async function checkAllEvents(ticketChannel) {
@@ -164,7 +150,6 @@ async function checkAllEvents(ticketChannel) {
     for (const [url, info] of Object.entries(EVENTS)) {
       const { artist, date, location, maxPrice, enabledUntil } = info;
 
-      // ✅ Skip if past enabledUntil
       if (!isEventEnabled(info)) {
         console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
         continue;
@@ -172,9 +157,14 @@ async function checkAllEvents(ticketChannel) {
 
       try {
         const { resale, offers = [] } = await checkResale(url);
-        const qualifying = offers.filter(o => qualifyOffer(o, maxPrice));
 
-        if (resale && qualifying.length > 0) {
+        // ✅ apply per-event price cap
+        const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
+
+        // ✅ total qualifying listings across ALL prices
+        const totalListings = qualifying.reduce((sum, o) => sum + (o.count || 0), 0);
+
+        if (resale && qualifying.length > 0 && totalListings >= MIN_TICKETS) {
           if (!alertedEvents[url]) {
             const ts = ukTimestamp();
             const lines = qualifying.map(formatOffer).join(" | ");
@@ -186,6 +176,7 @@ async function checkAllEvents(ticketChannel) {
               `Event Date: ${date}\n` +
               `Max Price: £${maxPrice}\n` +
               `Matches: ${lines}\n` +
+              `Total qualifying listings: ${totalListings}\n` +
               `Time Found (UK): ${ts}\n` +
               `${url}`
             );
@@ -197,7 +188,7 @@ async function checkAllEvents(ticketChannel) {
           alertedEvents[url] = false;
           console.log(
             resale
-              ? `Resale found but no matches for ${artist} (${date})`
+              ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings})`
               : `No resale tickets for ${artist} (${date})`
           );
         }
