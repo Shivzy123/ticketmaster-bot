@@ -23,7 +23,7 @@ const client = new Client({
 
 /**
  * ✅ EVENTS (multi-artist, per-event price caps, optional enabledUntil)
- * enabledUntil format: "YYYY-MM-DD" (UK date). If omitted => always enabled.
+ * enabledUntil format: "YYYY-MM-DD" (UK date). If enabledUntil is "" then always enabled.
  */
 
 //Format
