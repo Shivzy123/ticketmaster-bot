@@ -23,14 +23,14 @@ function isFeeLine(line) {
   );
 }
 
+// ✅ Only count lines that look like RESALE listings (ignore normal "Seated Ticket" lines)
 function looksLikeTicketLine(line) {
   const l = line.toLowerCase();
   return (
     l.includes("verified resale") ||
     l.includes("resale ticket") ||
-    l.includes("ticket") ||
-    l.includes("each") ||
-    l.includes("per ticket")
+    (l.includes("resale") &&
+      (l.includes("each") || l.includes("per ticket") || l.includes("ticket")))
   );
 }
 
@@ -72,7 +72,6 @@ async function checkResale(url) {
       .map(normalizeWhitespace)
       .filter(Boolean);
 
-    // Count ticket prices (heuristic)
     const priceCounts = new Map();
 
     for (const line of lines) {
