@@ -6,7 +6,7 @@ console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings)"
+  "INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings) + retry+debug"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
@@ -17,6 +17,11 @@ const cron = require("node-cron");
 // 🕰️ Channel for hourly check logs
 const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 
+// ✅ Debug + retry options (no Railway env vars needed)
+const DEBUG_RESULTS = true;          // set false when happy
+const RETRY_ON_EMPTY = true;         // retry once if resale/offers look empty
+const RETRY_DELAY_MS = 6000;         // wait before retry
+
 // Discord client
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -24,7 +29,7 @@ const client = new Client({
 });
 
 /**
- * ✅ EVENTS (multi-artist, per-event price caps, optional enabledUntil)
+ * ✅ EVENTS
  * enabledUntil format: "YYYY-MM-DD" (UK date). If enabledUntil is "" then always enabled.
  */
 const EVENTS = {
@@ -73,7 +78,7 @@ const EVENTS = {
 };
 
 // ✅ Filters
-const MIN_TICKETS = 2; // ✅ now means total qualifying listings across prices
+const MIN_TICKETS = 2; // total qualifying listings across prices
 const BETWEEN_EVENTS_DELAY_MS = 2000;
 
 let alertedEvents = {}; // url -> boolean
@@ -99,7 +104,6 @@ function ukHourLabel() {
   });
 }
 
-// ✅ Returns UK date in YYYY-MM-DD
 function ukDateYYYYMMDD() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London",
@@ -114,22 +118,20 @@ function ukDateYYYYMMDD() {
   return `${year}-${month}-${day}`;
 }
 
-// ✅ enabledUntil checker (inclusive): if today <= enabledUntil => enabled
 function isEventEnabled(info) {
   if (!info) return false;
 
   const until = String(info.enabledUntil || "").trim();
-  if (!until) return true; // ✅ empty => always enabled
+  if (!until) return true;
 
   const today = ukDateYYYYMMDD();
-
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(until);
   if (!valid) {
     console.log(`⚠️ enabledUntil is invalid (${until}) — treating as ENABLED`);
     return true;
   }
 
-  return today <= until; // inclusive
+  return today <= until;
 }
 
 function formatOffer(o) {
@@ -142,7 +144,10 @@ function qualifiesByPrice(o, maxPrice) {
   return o.priceNum <= maxPrice;
 }
 
-// Function to check all events (with lock to prevent overlapping runs)
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 async function checkAllEvents(ticketChannel) {
   if (isChecking) return;
   isChecking = true;
@@ -161,16 +166,35 @@ async function checkAllEvents(ticketChannel) {
       }
 
       try {
-        const { resale, offers = [] } = await checkResale(url);
+        // 1) initial attempt
+        let result = await checkResale(url);
+        let resale = !!result?.resale;
+        let offers = Array.isArray(result?.offers) ? result.offers : [];
 
-        // ✅ apply per-event price cap
+        // 2) retry once if Railway gives empty/false (common cloud flake)
+        if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
+          console.log(
+            `⚠️ Possible false-negative for ${artist} (${date}) — retrying once in ${RETRY_DELAY_MS}ms...`
+          );
+          await sleep(RETRY_DELAY_MS);
+
+          result = await checkResale(url);
+          resale = !!result?.resale;
+          offers = Array.isArray(result?.offers) ? result.offers : [];
+        }
+
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
-
-        // ✅ total qualifying listings across ALL prices
         const totalListings = qualifying.reduce(
           (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
           0
         );
+
+        if (DEBUG_RESULTS) {
+          console.log(
+            `[DEBUG] ${artist} (${date}) resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} alerted=${!!alertedEvents[url]}`
+          );
+          if (offers.length) console.log("[DEBUG offers]", offers);
+        }
 
         if (resale && qualifying.length > 0 && totalListings >= MIN_TICKETS) {
           if (!alertedEvents[url]) {
@@ -209,7 +233,7 @@ async function checkAllEvents(ticketChannel) {
         console.error(`Error checking ${artist} (${date}):`, err);
       }
 
-      await new Promise(r => setTimeout(r, BETWEEN_EVENTS_DELAY_MS));
+      await sleep(BETWEEN_EVENTS_DELAY_MS);
     }
   } finally {
     isChecking = false;
@@ -240,15 +264,12 @@ client.once("ready", async () => {
     "✅ Bot is online and monitoring Ticketmaster resale events!"
   );
 
-  // Run immediately on startup
   await checkAllEvents(ticketChannel);
 
-  // Every 5 minutes
   cron.schedule("*/5 * * * *", async () => {
     await checkAllEvents(ticketChannel);
   });
 
-  // Every hour
   cron.schedule("0 * * * *", async () => {
     const label = ukHourLabel();
     await timeCheckChannel.send(`🕰️ **${label} check**`);
