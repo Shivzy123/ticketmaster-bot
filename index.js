@@ -19,8 +19,8 @@ const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 
 // 📣 Daily report config
 const DAILY_REPORT_CHANNEL_ID = "1473945399919378524";
-const DAILY_REPORT_TIME_UK_HOUR = 10;     // ✅ 10am UK
-const DAILY_REPORT_TIME_UK_MINUTE = 0;    // ✅ :00
+const DAILY_REPORT_TIME_UK_HOUR = 9;     // ✅ 10am UK
+const DAILY_REPORT_TIME_UK_MINUTE = 20;    // ✅ :00
 const ALLOW_DAILY_REPORT = true;          // ✅ toggle daily report on/off
 
 // ✅ Daily report filters (report-only)
