@@ -6,7 +6,7 @@ console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: multi-artist events + per-event price caps + per-event minTickets + enabledUntil ✅ (minTickets = total listings) + retry+debug"
+  "INDEX VERSION: multi-artist events + per-event price caps + per-event minTickets + enabledUntil ✅ (minTickets = total listings) + retry+debug + daily report ✅"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
@@ -16,6 +16,16 @@ const cron = require("node-cron");
 
 // 🕰️ Channel for hourly check logs
 const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
+
+// 📣 Daily report config
+const DAILY_REPORT_CHANNEL_ID = "1473945399919378524";
+const DAILY_REPORT_TIME_UK_HOUR = 10;     // ✅ 10am UK
+const DAILY_REPORT_TIME_UK_MINUTE = 0;    // ✅ :00
+const ALLOW_DAILY_REPORT = true;          // ✅ toggle daily report on/off
+
+// ✅ Daily report filters (report-only)
+const DAILY_REPORT_MAX_PRICE_GBP = 1000;
+const DAILY_REPORT_MIN_LISTINGS = 1;
 
 // ✅ Debug + retry options (no Railway env vars needed)
 const DEBUG_RESULTS = true;          // set false when happy
@@ -140,11 +150,17 @@ function isEventEnabled(info) {
   return today <= until;
 }
 
-// ✅ Clean output: hide single listings and say "tickets"
-function formatOffer(o) {
+// ✅ Clean output for alerts: hide singles + say "tickets"
+function formatOfferAlert(o) {
   if (!o || typeof o.count !== "number") return null;
   if (o.count < 2) return null; // hide single listings
   return `${o.priceStr} — ${o.count} tickets`;
+}
+
+// ✅ Clean output for daily report: allow singles + say "tickets"
+function formatOfferReport(o) {
+  if (!o || typeof o.count !== "number") return null;
+  return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
 }
 
 function qualifiesByPrice(o, maxPrice) {
@@ -155,6 +171,25 @@ function qualifiesByPrice(o, maxPrice) {
 
 async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+async function fetchWithRetry(url, label) {
+  // 1) initial attempt
+  let result = await checkResale(url);
+  let resale = !!result?.resale;
+  let offers = Array.isArray(result?.offers) ? result.offers : [];
+
+  // 2) retry once if empty/false (cloud flake)
+  if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
+    console.log(`⚠️ Possible false-negative for ${label} — retrying once in ${RETRY_DELAY_MS}ms...`);
+    await sleep(RETRY_DELAY_MS);
+
+    result = await checkResale(url);
+    resale = !!result?.resale;
+    offers = Array.isArray(result?.offers) ? result.offers : [];
+  }
+
+  return { resale, offers };
 }
 
 async function checkAllEvents(ticketChannel) {
@@ -168,36 +203,17 @@ async function checkAllEvents(ticketChannel) {
       const { artist, date, location, maxPrice, minTickets, enabledUntil } = info;
 
       if (!isEventEnabled(info)) {
-        console.log(
-          `⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`
-        );
+        console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
         continue;
       }
 
-      // fallback if you forget to set it
       const minTicketsForEvent = typeof minTickets === "number" ? minTickets : 2;
 
       try {
-        // 1) initial attempt
-        let result = await checkResale(url);
-        let resale = !!result?.resale;
-        let offers = Array.isArray(result?.offers) ? result.offers : [];
-
-        // 2) retry once if Railway gives empty/false (common cloud flake)
-        if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
-          console.log(
-            `⚠️ Possible false-negative for ${artist} (${date}) — retrying once in ${RETRY_DELAY_MS}ms...`
-          );
-          await sleep(RETRY_DELAY_MS);
-
-          result = await checkResale(url);
-          resale = !!result?.resale;
-          offers = Array.isArray(result?.offers) ? result.offers : [];
-        }
+        const { resale, offers } = await fetchWithRetry(url, `${artist} (${date})`);
 
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
 
-        // ✅ total qualifying listings across ALL prices (per-event threshold)
         const totalListings = qualifying.reduce(
           (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
           0
@@ -210,38 +226,33 @@ async function checkAllEvents(ticketChannel) {
           if (offers.length) console.log("[DEBUG offers]", offers);
         }
 
-        // ✅ Build the message line items with clean formatting (2+ only)
         const lines = qualifying
-          .map(formatOffer)
+          .map(formatOfferAlert)
           .filter(Boolean)
           .join(" | ");
 
-        // ✅ Post if threshold is met (per-event minTickets) AND we have something worth showing
         if (resale && totalListings >= minTicketsForEvent && lines.length > 0) {
           if (!alertedEvents[url]) {
             const ts = ukTimestamp();
 
             await ticketChannel.send(
               `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
-                `Artist: ${artist}\n` +
-                `Location: ${location}\n` +
-                `Event Date: ${date}\n` +
-                `Max Price: £${maxPrice}\n` +
-                `Matches: ${lines}\n` +
-                `Time Found (UK): ${ts}\n` +
-                `${url}`
+              `Artist: ${artist}\n` +
+              `Location: ${location}\n` +
+              `Event Date: ${date}\n` +
+              `Max Price: £${maxPrice}\n` +
+              `Matches: ${lines}\n` +
+              `Time Found (UK): ${ts}\n` +
+              `${url}`
             );
 
             alertedEvents[url] = true;
             console.log(`Alert sent for ${artist} (${date})`);
           } else {
-            console.log(
-              `Still matching filters for ${artist} (${date}) (already alerted).`
-            );
+            console.log(`Still matching filters for ${artist} (${date}) (already alerted).`);
           }
         } else {
           alertedEvents[url] = false;
-
           console.log(
             resale
               ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings}, need ${minTicketsForEvent})`
@@ -259,6 +270,73 @@ async function checkAllEvents(ticketChannel) {
   }
 }
 
+async function runDailyReport(dailyReportChannel) {
+  if (!dailyReportChannel) return;
+
+  const ts = ukTimestamp();
+  await dailyReportChannel.send(`📊 **Daily resale report** (UK time: ${ts})`);
+
+  for (const [url, info] of Object.entries(EVENTS)) {
+    const { artist, date, location, enabledUntil } = info;
+
+    if (!isEventEnabled(info)) {
+      await dailyReportChannel.send(
+        `Artist: ${artist}\nLocation: ${location}\nEvent Date: ${date}\nStatus: Skipped (expired: enabledUntil=${enabledUntil})\n${url}`
+      );
+      continue;
+    }
+
+    try {
+      const { resale, offers } = await fetchWithRetry(url, `DAILY ${artist} (${date})`);
+
+      const qualifying = offers.filter(o => qualifiesByPrice(o, DAILY_REPORT_MAX_PRICE_GBP));
+      const totalListings = qualifying.reduce(
+        (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
+        0
+      );
+
+      const lines = qualifying
+        .map(formatOfferReport)
+        .filter(Boolean)
+        .join(" | ");
+
+      // Post per-link report
+      if (resale && totalListings >= DAILY_REPORT_MIN_LISTINGS && lines.length > 0) {
+        await dailyReportChannel.send(
+          `Artist: ${artist}\n` +
+          `Location: ${location}\n` +
+          `Event Date: ${date}\n` +
+          `Max Price: £${DAILY_REPORT_MAX_PRICE_GBP}\n` +
+          `Matches: ${lines}\n` +
+          `Total qualifying listings: ${totalListings}\n` +
+          `Time Found (UK): ${ts}\n` +
+          `${url}`
+        );
+      } else {
+        await dailyReportChannel.send(
+          `Artist: ${artist}\n` +
+          `Location: ${location}\n` +
+          `Event Date: ${date}\n` +
+          `Max Price: £${DAILY_REPORT_MAX_PRICE_GBP}\n` +
+          `Matches: none\n` +
+          `Total qualifying listings: ${totalListings}\n` +
+          `Time Checked (UK): ${ts}\n` +
+          `${url}`
+        );
+      }
+    } catch (err) {
+      console.error(`Daily report error for ${artist} (${date}):`, err);
+      await dailyReportChannel.send(
+        `Artist: ${artist}\nLocation: ${location}\nEvent Date: ${date}\nStatus: ERROR\n${url}`
+      );
+    }
+
+    await sleep(1500);
+  }
+
+  await dailyReportChannel.send("✅ **Daily report complete**");
+}
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -272,16 +350,18 @@ client.once("ready", async () => {
   const timeCheckChannel = await client.channels
     .fetch(TIME_CHECK_CHANNEL_ID)
     .catch(err => {
-      console.error(
-        "Failed to fetch time-check channel. Check TIME_CHECK_CHANNEL_ID.",
-        err
-      );
+      console.error("Failed to fetch time-check channel. Check TIME_CHECK_CHANNEL_ID.", err);
       process.exit(1);
     });
 
-  await ticketChannel.send(
-    "✅ Bot is online and monitoring Ticketmaster resale events!"
-  );
+  const dailyReportChannel = ALLOW_DAILY_REPORT
+    ? await client.channels.fetch(DAILY_REPORT_CHANNEL_ID).catch(err => {
+        console.error("Failed to fetch daily-report channel. Check DAILY_REPORT_CHANNEL_ID.", err);
+        process.exit(1);
+      })
+    : null;
+
+  await ticketChannel.send("✅ Bot is online and monitoring Ticketmaster resale events!");
 
   await checkAllEvents(ticketChannel);
 
@@ -294,6 +374,20 @@ client.once("ready", async () => {
     await timeCheckChannel.send(`🕰️ **${label} check**`);
     await checkAllEvents(ticketChannel);
   });
+
+  // ✅ Daily report at 10:00 UK (optional)
+  if (ALLOW_DAILY_REPORT) {
+    cron.schedule(
+      `${DAILY_REPORT_TIME_UK_MINUTE} ${DAILY_REPORT_TIME_UK_HOUR} * * *`,
+      async () => {
+        await runDailyReport(dailyReportChannel);
+      },
+      { timezone: "Europe/London" }
+    );
+    console.log("Daily report is ENABLED ✅");
+  } else {
+    console.log("Daily report is DISABLED ❌");
+  }
 });
 
 client.login(process.env.DISCORD_TOKEN);
