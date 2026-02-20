@@ -6,7 +6,7 @@ console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: multi-artist events + per-event price caps + per-event minTickets + enabledUntil ✅ (minTickets = total listings) + retry+debug + daily report ✅"
+  "INDEX VERSION: multi-artist events + per-event price caps + per-event minTickets + enabledUntil ✅ (minTickets = total listings) + retry+debug + daily report ✅ (cached lastSeen)"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
@@ -21,10 +21,10 @@ const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 const DAILY_REPORT_CHANNEL_ID = "1473945399919378524";
 
 // ✅ Daily report time (UK)
-const DAILY_REPORT_TIME_UK_HOUR = 11;     // ✅ 10am UK
-const DAILY_REPORT_TIME_UK_MINUTE = 6;    // ✅ :00
+const DAILY_REPORT_TIME_UK_HOUR = 15;      // example: 11
+const DAILY_REPORT_TIME_UK_MINUTE = 45;     // example: :06
 
-const ALLOW_DAILY_REPORT = true;          // ✅ toggle daily report on/off
+const ALLOW_DAILY_REPORT = true;           // ✅ toggle daily report on/off
 const RUN_DAILY_REPORT_ON_STARTUP = false; // ✅ set true to test immediately on deploy
 
 // ✅ Daily report filters (report-only)
@@ -32,9 +32,9 @@ const DAILY_REPORT_MAX_PRICE_GBP = 5000;
 const DAILY_REPORT_MIN_LISTINGS = 1;
 
 // ✅ Debug + retry options (no Railway env vars needed)
-const DEBUG_RESULTS = true;          // set false when happy
-const RETRY_ON_EMPTY = true;         // retry once if resale/offers look empty
-const RETRY_DELAY_MS = 6000;         // wait before retry
+const DEBUG_RESULTS = true;    // set false when happy
+const RETRY_ON_EMPTY = true;   // retry once if resale/offers look empty
+const RETRY_DELAY_MS = 6000;   // wait before retry
 
 // Discord client
 const client = new Client({
@@ -104,6 +104,9 @@ const BETWEEN_EVENTS_DELAY_MS = 2000;
 let alertedEvents = {}; // url -> boolean
 let isChecking = false;
 
+// ✅ Cache last successful scrape per URL (helps daily report reliability)
+const lastSeen = {}; // url -> { checkedAtUk, resale, offers }
+
 function ukTimestamp() {
   return new Date().toLocaleString("en-GB", {
     timeZone: "Europe/London",
@@ -161,7 +164,7 @@ function formatOfferAlert(o) {
   return `${o.priceStr} — ${o.count} tickets`;
 }
 
-// ✅ Clean output for daily report: allow singles + say "tickets"
+// ✅ Daily report: allow singles
 function formatOfferReport(o) {
   if (!o || typeof o.count !== "number") return null;
   return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
@@ -183,7 +186,9 @@ async function fetchWithRetry(url, label) {
   let offers = Array.isArray(result?.offers) ? result.offers : [];
 
   if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
-    console.log(`⚠️ Possible false-negative for ${label} — retrying once in ${RETRY_DELAY_MS}ms...`);
+    console.log(
+      `⚠️ Possible false-negative for ${label} — retrying once in ${RETRY_DELAY_MS}ms...`
+    );
     await sleep(RETRY_DELAY_MS);
 
     result = await checkResale(url);
@@ -205,7 +210,9 @@ async function checkAllEvents(ticketChannel) {
       const { artist, date, location, maxPrice, minTickets, enabledUntil } = info;
 
       if (!isEventEnabled(info)) {
-        console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
+        console.log(
+          `⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`
+        );
         continue;
       }
 
@@ -213,6 +220,13 @@ async function checkAllEvents(ticketChannel) {
 
       try {
         const { resale, offers } = await fetchWithRetry(url, `${artist} (${date})`);
+
+        // ✅ Update cache for daily report
+        lastSeen[url] = {
+          checkedAtUk: ukTimestamp(),
+          resale,
+          offers
+        };
 
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
         const totalListings = qualifying.reduce(
@@ -274,8 +288,8 @@ async function checkAllEvents(ticketChannel) {
 async function runDailyReport(dailyReportChannel) {
   if (!dailyReportChannel) return;
 
-  const ts = ukTimestamp();
-  await dailyReportChannel.send(`📊 **Daily resale report** (UK time: ${ts})`);
+  const reportTs = ukTimestamp();
+  await dailyReportChannel.send(`📊 **Daily resale report** (UK time: ${reportTs})`);
 
   for (const [url, info] of Object.entries(EVENTS)) {
     const { artist, date, location, enabledUntil } = info;
@@ -288,7 +302,21 @@ async function runDailyReport(dailyReportChannel) {
     }
 
     try {
-      const { resale, offers } = await fetchWithRetry(url, `DAILY ${artist} (${date})`);
+      // ✅ Prefer cached results from normal checks
+      let resale, offers, checkedAtUk;
+
+      const cached = lastSeen[url];
+      if (cached && Array.isArray(cached.offers)) {
+        resale = cached.resale;
+        offers = cached.offers;
+        checkedAtUk = cached.checkedAtUk;
+      } else {
+        // fallback to live scrape if nothing cached yet
+        const fresh = await fetchWithRetry(url, `DAILY ${artist} (${date})`);
+        resale = fresh.resale;
+        offers = fresh.offers;
+        checkedAtUk = ukTimestamp();
+      }
 
       const qualifying = offers.filter(o => qualifiesByPrice(o, DAILY_REPORT_MAX_PRICE_GBP));
       const totalListings = qualifying.reduce(
@@ -309,7 +337,7 @@ async function runDailyReport(dailyReportChannel) {
           `Max Price: £${DAILY_REPORT_MAX_PRICE_GBP}\n` +
           `Matches: ${lines}\n` +
           `Total qualifying listings: ${totalListings}\n` +
-          `Time Checked (UK): ${ts}\n` +
+          `Time Checked (UK): ${checkedAtUk}\n` +
           `${url}`
         );
       } else {
@@ -320,7 +348,7 @@ async function runDailyReport(dailyReportChannel) {
           `Max Price: £${DAILY_REPORT_MAX_PRICE_GBP}\n` +
           `Matches: none\n` +
           `Total qualifying listings: ${totalListings}\n` +
-          `Time Checked (UK): ${ts}\n` +
+          `Time Checked (UK): ${checkedAtUk}\n` +
           `${url}`
         );
       }
@@ -363,12 +391,15 @@ client.once("ready", async () => {
 
   await ticketChannel.send("✅ Bot is online and monitoring Ticketmaster resale events!");
 
+  // Run immediately on startup
   await checkAllEvents(ticketChannel);
 
+  // Every 5 minutes
   cron.schedule("*/5 * * * *", async () => {
     await checkAllEvents(ticketChannel);
   });
 
+  // Every hour
   cron.schedule("0 * * * *", async () => {
     const label = ukHourLabel();
     await timeCheckChannel.send(`🕰️ **${label} check**`);
