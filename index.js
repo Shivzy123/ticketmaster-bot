@@ -22,14 +22,14 @@ const DAILY_REPORT_CHANNEL_ID = "1473945399919378524";
 
 // ✅ Daily report time (UK) — 10:00 UK
 const DAILY_REPORT_TIME_UK_HOUR = 18;
-const DAILY_REPORT_TIME_UK_MINUTE = 11;
+const DAILY_REPORT_TIME_UK_MINUTE = 20;
 
 // ✅ Daily report toggles
 const ALLOW_DAILY_REPORT = true;
 const RUN_DAILY_REPORT_ON_STARTUP = false;
 
 // ✅ TEST MODE: set true to prove daily report is firing (runs every minute), then turn back to false
-const DAILY_REPORT_TEST_MODE = false;
+const DAILY_REPORT_TEST_MODE = true;
 
 // ✅ Daily report filters (report-only)
 const DAILY_REPORT_MAX_PRICE_GBP = 5000;
