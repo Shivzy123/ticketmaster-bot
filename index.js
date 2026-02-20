@@ -6,7 +6,7 @@ console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
 // ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: multi-artist events + per-event price caps + enabledUntil ✅ (MIN_TICKETS = total listings) + retry+debug"
+  "INDEX VERSION: retry+debug hardened ✅ (extra retries + crash guards + cron timezone)"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
@@ -17,10 +17,14 @@ const cron = require("node-cron");
 // 🕰️ Channel for hourly check logs
 const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 
-// ✅ Debug + retry options (no Railway env vars needed)
-const DEBUG_RESULTS = true;          // set false when happy
-const RETRY_ON_EMPTY = true;         // retry once if resale/offers look empty
-const RETRY_DELAY_MS = 6000;         // wait before retry
+// ✅ Debug + retry options
+const DEBUG_RESULTS = true;     // set false when happy
+const RETRY_ON_EMPTY = true;    // retry if resale/offers look empty
+const RETRY_DELAY_MS = 6000;    // first retry wait
+const RETRY_DELAY_MS_2 = 12000; // second retry wait
+
+// small delay between event checks
+const BETWEEN_EVENTS_DELAY_MS = 2000;
 
 // Discord client
 const client = new Client({
@@ -79,7 +83,6 @@ const EVENTS = {
 
 // ✅ Filters
 const MIN_TICKETS = 2; // total qualifying listings across prices
-const BETWEEN_EVENTS_DELAY_MS = 2000;
 
 let alertedEvents = {}; // url -> boolean
 let isChecking = false;
@@ -135,6 +138,7 @@ function isEventEnabled(info) {
 }
 
 function formatOffer(o) {
+  // keep your original wording
   return `${o.priceStr} — ${o.count} listing${o.count === 1 ? "" : "s"}`;
 }
 
@@ -148,6 +152,43 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+/**
+ * ✅ Hardened fetch with up to 2 retries for Railway flakiness
+ */
+async function fetchWithRetry(url, label) {
+  let attempt = 1;
+  let result = await checkResale(url);
+  let resale = !!result?.resale;
+  let offers = Array.isArray(result?.offers) ? result.offers : [];
+
+  if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
+    console.log(
+      `⚠️ Possible false-negative for ${label} — retry #1 in ${RETRY_DELAY_MS}ms...`
+    );
+    await sleep(RETRY_DELAY_MS);
+
+    attempt = 2;
+    result = await checkResale(url);
+    resale = !!result?.resale;
+    offers = Array.isArray(result?.offers) ? result.offers : [];
+  }
+
+  if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
+    console.log(
+      `⚠️ Still empty for ${label} — retry #2 in ${RETRY_DELAY_MS_2}ms...`
+    );
+    await sleep(RETRY_DELAY_MS_2);
+
+    attempt = 3;
+    result = await checkResale(url);
+    resale = !!result?.resale;
+    offers = Array.isArray(result?.offers) ? result.offers : [];
+  }
+
+  return { resale, offers, attempt };
+}
+
+// Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(ticketChannel) {
   if (isChecking) return;
   isChecking = true;
@@ -166,22 +207,10 @@ async function checkAllEvents(ticketChannel) {
       }
 
       try {
-        // 1) initial attempt
-        let result = await checkResale(url);
-        let resale = !!result?.resale;
-        let offers = Array.isArray(result?.offers) ? result.offers : [];
-
-        // 2) retry once if Railway gives empty/false (common cloud flake)
-        if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
-          console.log(
-            `⚠️ Possible false-negative for ${artist} (${date}) — retrying once in ${RETRY_DELAY_MS}ms...`
-          );
-          await sleep(RETRY_DELAY_MS);
-
-          result = await checkResale(url);
-          resale = !!result?.resale;
-          offers = Array.isArray(result?.offers) ? result.offers : [];
-        }
+        const { resale, offers, attempt } = await fetchWithRetry(
+          url,
+          `${artist} (${date})`
+        );
 
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
         const totalListings = qualifying.reduce(
@@ -191,7 +220,7 @@ async function checkAllEvents(ticketChannel) {
 
         if (DEBUG_RESULTS) {
           console.log(
-            `[DEBUG] ${artist} (${date}) resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} alerted=${!!alertedEvents[url]}`
+            `[DEBUG] ${artist} (${date}) attempt=${attempt} resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} alerted=${!!alertedEvents[url]}`
           );
           if (offers.length) console.log("[DEBUG offers]", offers);
         }
@@ -240,6 +269,19 @@ async function checkAllEvents(ticketChannel) {
   }
 }
 
+/**
+ * ✅ Crash guards (important on Railway)
+ */
+process.on("unhandledRejection", err => {
+  console.error("[FATAL] Unhandled Rejection:", err);
+});
+process.on("uncaughtException", err => {
+  console.error("[FATAL] Uncaught Exception:", err);
+});
+
+client.on("error", err => console.error("[Discord] client error:", err));
+client.on("shardError", err => console.error("[Discord] shard error:", err));
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -264,17 +306,30 @@ client.once("ready", async () => {
     "✅ Bot is online and monitoring Ticketmaster resale events!"
   );
 
+  // Run immediately on startup
   await checkAllEvents(ticketChannel);
 
-  cron.schedule("*/5 * * * *", async () => {
-    await checkAllEvents(ticketChannel);
-  });
+  // Every 5 minutes
+  cron.schedule(
+    "*/5 * * * *",
+    async () => {
+      await checkAllEvents(ticketChannel);
+    },
+    { timezone: "Europe/London" }
+  );
 
-  cron.schedule("0 * * * *", async () => {
-    const label = ukHourLabel();
-    await timeCheckChannel.send(`🕰️ **${label} check**`);
-    await checkAllEvents(ticketChannel);
-  });
+  // Every hour
+  cron.schedule(
+    "0 * * * *",
+    async () => {
+      const label = ukHourLabel();
+      await timeCheckChannel.send(`🕰️ **${label} check**`);
+      await checkAllEvents(ticketChannel);
+    },
+    { timezone: "Europe/London" }
+  );
+
+  console.log("Schedulers started ✅");
 });
 
 client.login(process.env.DISCORD_TOKEN);
