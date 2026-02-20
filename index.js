@@ -1,5 +1,9 @@
 require("dotenv").config();
 
+// 🛑 Prevent silent crashes (Railway container can stop without this)
+process.on("unhandledRejection", err => console.error("UNHANDLED REJECTION:", err));
+process.on("uncaughtException", err => console.error("UNCAUGHT EXCEPTION:", err));
+
 // ✅ Debug: check if environment variables are set
 console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
@@ -365,7 +369,7 @@ async function runDailyReport(dailyReportChannel) {
   }
 }
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   const ticketChannel = await client.channels
@@ -385,19 +389,27 @@ client.once("ready", async () => {
       process.exit(1);
     });
 
-  const dailyReportChannel = ALLOW_DAILY_REPORT
-    ? await client.channels.fetch(DAILY_REPORT_CHANNEL_ID).catch(err => {
-        console.error(
-          "Failed to fetch daily-report channel. Check DAILY_REPORT_CHANNEL_ID.",
-          err
-        );
-        process.exit(1);
-      })
-    : null;
+  // ✅ SAFER: do NOT kill the bot if daily report channel can't be fetched
+  let dailyReportChannel = null;
+  if (ALLOW_DAILY_REPORT) {
+    try {
+      dailyReportChannel = await client.channels.fetch(DAILY_REPORT_CHANNEL_ID);
+      console.log("[DailyReport] Channel fetched OK");
+    } catch (err) {
+      console.error(
+        "[DailyReport] Failed to fetch daily-report channel (will keep bot running):",
+        err
+      );
+    }
+  }
 
   await ticketChannel.send("✅ Bot is online and monitoring Ticketmaster resale events!");
 
-  await checkAllEvents(ticketChannel);
+  // ✅ Delay first scrape slightly (helps Railway stability)
+  setTimeout(() => {
+    console.log("[Startup] Running first resale check...");
+    checkAllEvents(ticketChannel);
+  }, 5000);
 
   cron.schedule("*/5 * * * *", async () => {
     await checkAllEvents(ticketChannel);
@@ -414,14 +426,18 @@ client.once("ready", async () => {
   );
 
   // ✅ Daily report (optional) - UK timezone
-  if (ALLOW_DAILY_REPORT) {
+  if (ALLOW_DAILY_REPORT && dailyReportChannel) {
     const cronExpr = `${DAILY_REPORT_TIME_UK_MINUTE} ${DAILY_REPORT_TIME_UK_HOUR} * * *`;
 
     if (DAILY_REPORT_TEST_MODE) {
-      cron.schedule("* * * * *", async () => {
-        console.log(`[DailyReport] TEST MODE trigger at ${ukTimestamp()}`);
-        await runDailyReport(dailyReportChannel);
-      }, { timezone: "Europe/London" });
+      cron.schedule(
+        "* * * * *",
+        async () => {
+          console.log(`[DailyReport] TEST MODE trigger at ${ukTimestamp()}`);
+          await runDailyReport(dailyReportChannel);
+        },
+        { timezone: "Europe/London" }
+      );
 
       console.log("[DailyReport] TEST MODE ENABLED: report will run every minute (UK).");
     } else {
@@ -448,6 +464,8 @@ client.once("ready", async () => {
     }
 
     console.log("Daily report is ENABLED ✅");
+  } else if (ALLOW_DAILY_REPORT && !dailyReportChannel) {
+    console.log("Daily report is ENABLED but channel fetch failed ❌");
   } else {
     console.log("Daily report is DISABLED ❌");
   }
