@@ -1,30 +1,28 @@
 require("dotenv").config();
 
-// ✅ Debug: check if environment variables are set
 console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
-// ✅ Helps confirm Railway is running the latest deploy
 console.log(
-  "INDEX VERSION: retry+debug hardened ✅ (extra retries + crash guards + cron timezone)"
+  "INDEX VERSION: resilient Ticketmaster checker (protection-detect + dumps + sane retries + jitter) ✅"
 );
 console.log("DEPLOY SHA:", process.env.RAILWAY_GIT_COMMIT_SHA || "unknown");
 
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
-const { checkResale } = require("./checker");
+const { checkResale, cleanUrl } = require("./checker");
 const cron = require("node-cron");
 
-// 🕰️ Channel for hourly check logs
 const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 
-// ✅ Debug + retry options
-const DEBUG_RESULTS = true;     // set false when happy
-const RETRY_ON_EMPTY = true;    // retry if resale/offers look empty
-const RETRY_DELAY_MS = 6000;    // first retry wait
-const RETRY_DELAY_MS_2 = 12000; // second retry wait
+// If you want screenshots/HTML when blocked:
+process.env.SAVE_BLOCKED_DUMPS = process.env.SAVE_BLOCKED_DUMPS || "true";
 
-// small delay between event checks
-const BETWEEN_EVENTS_DELAY_MS = 2000;
+// Reduce blocks:
+const CHECK_CRON_EVERY_MINUTES = 15; // was 5 — slower helps a lot on Railway
+const BETWEEN_EVENTS_DELAY_MS = 2500;
+const JITTER_MS = 2500;
+
+const DEBUG_RESULTS = true;
 
 // Discord client
 const client = new Client({
@@ -32,60 +30,69 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-/**
- * ✅ EVENTS
- * enabledUntil format: "YYYY-MM-DD" (UK date). If enabledUntil is "" then always enabled.
- */
 const EVENTS = {
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-18-07-2026/event/2300638CCCE11DC5": {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-18"
+    enabledUntil: "2026-07-18",
+    minTickets: 1
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-19"
+    enabledUntil: "2026-07-19",
+    minTickets: 1
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-22"
+    enabledUntil: "2026-07-22",
+    minTickets: 1
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-24"
+    enabledUntil: "2026-07-24",
+    minTickets: 1
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-25"
+    enabledUntil: "2026-07-25",
+    minTickets: 1
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
     maxPrice: 2000,
-    enabledUntil: "2026-07-28"
+    enabledUntil: "2026-07-28",
+    minTickets: 1
   }
 };
 
-// ✅ Filters
-const MIN_TICKETS = 2; // total qualifying listings across prices
-
-let alertedEvents = {}; // url -> boolean
+let alertedEvents = {}; // key -> boolean
 let isChecking = false;
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
+// keep Railway alive even if cron pauses
+setInterval(() => {}, 60 * 1000);
 
 function ukTimestamp() {
   return new Date().toLocaleString("en-GB", {
@@ -123,23 +130,12 @@ function ukDateYYYYMMDD() {
 
 function isEventEnabled(info) {
   if (!info) return false;
-
   const until = String(info.enabledUntil || "").trim();
   if (!until) return true;
-
   const today = ukDateYYYYMMDD();
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(until);
-  if (!valid) {
-    console.log(`⚠️ enabledUntil is invalid (${until}) — treating as ENABLED`);
-    return true;
-  }
-
+  if (!valid) return true;
   return today <= until;
-}
-
-function formatOffer(o) {
-  // keep your original wording
-  return `${o.priceStr} — ${o.count} listing${o.count === 1 ? "" : "s"}`;
 }
 
 function qualifiesByPrice(o, maxPrice) {
@@ -148,47 +144,31 @@ function qualifiesByPrice(o, maxPrice) {
   return o.priceNum <= maxPrice;
 }
 
+function formatOfferLine(o) {
+  // show as "£488.60 — 4 tickets"
+  return `${o.priceStr} — ${o.count} ticket${o.count === 1 ? "" : "s"}`;
+}
+
 async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-/**
- * ✅ Hardened fetch with up to 2 retries for Railway flakiness
- */
-async function fetchWithRetry(url, label) {
-  let attempt = 1;
-  let result = await checkResale(url);
-  let resale = !!result?.resale;
-  let offers = Array.isArray(result?.offers) ? result.offers : [];
+async function fetchWithBackoff(url, label) {
+  // Attempt 1
+  let r = await checkResale(url);
+  if (r?.blocked) return { ...r, attempt: 1 };
 
-  if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
-    console.log(
-      `⚠️ Possible false-negative for ${label} — retry #1 in ${RETRY_DELAY_MS}ms...`
-    );
-    await sleep(RETRY_DELAY_MS);
-
-    attempt = 2;
-    result = await checkResale(url);
-    resale = !!result?.resale;
-    offers = Array.isArray(result?.offers) ? result.offers : [];
+  // If not blocked but empty, try one more time after short delay
+  if (!r?.resale || !Array.isArray(r?.offers) || r.offers.length === 0) {
+    console.log(`⚠️ Possible false-negative for ${label} — retry in 7000ms...`);
+    await sleep(7000);
+    r = await checkResale(url);
+    if (r?.blocked) return { ...r, attempt: 2 };
   }
 
-  if (RETRY_ON_EMPTY && (!resale || offers.length === 0)) {
-    console.log(
-      `⚠️ Still empty for ${label} — retry #2 in ${RETRY_DELAY_MS_2}ms...`
-    );
-    await sleep(RETRY_DELAY_MS_2);
-
-    attempt = 3;
-    result = await checkResale(url);
-    resale = !!result?.resale;
-    offers = Array.isArray(result?.offers) ? result.offers : [];
-  }
-
-  return { resale, offers, attempt };
+  return { ...r, attempt: 2 };
 }
 
-// Function to check all events (with lock to prevent overlapping runs)
 async function checkAllEvents(ticketChannel) {
   if (isChecking) return;
   isChecking = true;
@@ -196,65 +176,64 @@ async function checkAllEvents(ticketChannel) {
   try {
     console.log("Checking all events for resale tickets...");
 
-    for (const [url, info] of Object.entries(EVENTS)) {
-      const { artist, date, location, maxPrice, enabledUntil } = info;
+    for (const [rawUrl, info] of Object.entries(EVENTS)) {
+      const url = cleanUrl(rawUrl);
+      const key = url; // use clean key so query changes don’t break alert state
+
+      const { artist, date, location, maxPrice, minTickets, enabledUntil } = info;
 
       if (!isEventEnabled(info)) {
-        console.log(
-          `⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`
-        );
+        console.log(`⏭️ Skipping (expired): ${artist} (${date}) — enabledUntil=${enabledUntil}`);
         continue;
       }
 
+      const minTicketsForEvent = typeof minTickets === "number" ? minTickets : 1;
+
       try {
-        const { resale, offers, attempt } = await fetchWithRetry(
-          url,
-          `${artist} (${date})`
-        );
+        const res = await fetchWithBackoff(url, `${artist} (${date})`);
+
+        if (res.blocked) {
+          console.log(`🚫 Blocked for ${artist} (${date}) — ${res.reason || "unknown"}`);
+          // Don't flip alerted state; just skip
+          continue;
+        }
+
+        const resale = !!res.resale;
+        const offers = Array.isArray(res.offers) ? res.offers : [];
 
         const qualifying = offers.filter(o => qualifiesByPrice(o, maxPrice));
-        const totalListings = qualifying.reduce(
-          (sum, o) => sum + (typeof o.count === "number" ? o.count : 0),
-          0
-        );
+        const totalTickets = qualifying.reduce((sum, o) => sum + (typeof o.count === "number" ? o.count : 0), 0);
 
         if (DEBUG_RESULTS) {
           console.log(
-            `[DEBUG] ${artist} (${date}) attempt=${attempt} resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalListings=${totalListings} alerted=${!!alertedEvents[url]}`
+            `[DEBUG] ${artist} (${date}) attempt=${res.attempt} resale=${resale} offers=${offers.length} qualifying=${qualifying.length} totalTickets=${totalTickets} alerted=${!!alertedEvents[key]} finalUrl=${res.finalUrl || ""}`
           );
-          if (offers.length) console.log("[DEBUG offers]", offers);
         }
 
-        if (resale && qualifying.length > 0 && totalListings >= MIN_TICKETS) {
-          if (!alertedEvents[url]) {
+        if (resale && qualifying.length > 0 && totalTickets >= minTicketsForEvent) {
+          if (!alertedEvents[key]) {
             const ts = ukTimestamp();
-            const lines = qualifying.map(formatOffer).join(" | ");
+            const lines = qualifying.map(formatOfferLine).join(" | ");
 
             await ticketChannel.send(
               `🚨 **RESALE TICKETS DETECTED (MATCHED FILTERS)!** 🚨\n` +
-                `Artist: ${artist}\n` +
-                `Location: ${location}\n` +
-                `Event Date: ${date}\n` +
-                `Max Price: £${maxPrice}\n` +
-                `Matches: ${lines}\n` +
-                `Total qualifying listings: ${totalListings}\n` +
-                `Time Found (UK): ${ts}\n` +
-                `${url}`
+              `Artist: ${artist}\n` +
+              `Location: ${location}\n` +
+              `Event Date: ${date}\n` +
+              `Max Price: £${maxPrice}\n` +
+              `Matches: ${lines}\n` +
+              `Time Found (UK): ${ts}\n` +
+              `${url}`
             );
 
-            alertedEvents[url] = true;
+            alertedEvents[key] = true;
             console.log(`Alert sent for ${artist} (${date})`);
-          } else {
-            console.log(
-              `Still matching filters for ${artist} (${date}) (already alerted).`
-            );
           }
         } else {
-          alertedEvents[url] = false;
-
+          alertedEvents[key] = false;
           console.log(
             resale
-              ? `Resale found but no matches for ${artist} (${date}) (qualifying listings: ${totalListings})`
+              ? `Resale found but no matches for ${artist} (${date}) (qualifying tickets: ${totalTickets}, need ${minTicketsForEvent})`
               : `No resale tickets for ${artist} (${date})`
           );
         }
@@ -262,63 +241,36 @@ async function checkAllEvents(ticketChannel) {
         console.error(`Error checking ${artist} (${date}):`, err);
       }
 
-      await sleep(BETWEEN_EVENTS_DELAY_MS);
+      await sleep(BETWEEN_EVENTS_DELAY_MS + Math.floor(Math.random() * JITTER_MS));
     }
   } finally {
     isChecking = false;
   }
 }
 
-/**
- * ✅ Crash guards (important on Railway)
- */
-process.on("unhandledRejection", err => {
-  console.error("[FATAL] Unhandled Rejection:", err);
-});
-process.on("uncaughtException", err => {
-  console.error("[FATAL] Uncaught Exception:", err);
-});
-
-client.on("error", err => console.error("[Discord] client error:", err));
-client.on("shardError", err => console.error("[Discord] shard error:", err));
-
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const ticketChannel = await client.channels
-    .fetch(process.env.CHANNEL_ID)
-    .catch(err => {
-      console.error("Failed to fetch ticket channel. Check CHANNEL_ID.", err);
-      process.exit(1);
-    });
+  const ticketChannel = await client.channels.fetch(process.env.CHANNEL_ID).catch(err => {
+    console.error("Failed to fetch ticket channel. Check CHANNEL_ID.", err);
+    process.exit(1);
+  });
 
-  const timeCheckChannel = await client.channels
-    .fetch(TIME_CHECK_CHANNEL_ID)
-    .catch(err => {
-      console.error(
-        "Failed to fetch time-check channel. Check TIME_CHECK_CHANNEL_ID.",
-        err
-      );
-      process.exit(1);
-    });
+  const timeCheckChannel = await client.channels.fetch(TIME_CHECK_CHANNEL_ID).catch(err => {
+    console.error("Failed to fetch time-check channel. Check TIME_CHECK_CHANNEL_ID.", err);
+    process.exit(1);
+  });
 
-  await ticketChannel.send(
-    "✅ Bot is online and monitoring Ticketmaster resale events!"
-  );
+  await ticketChannel.send("✅ Bot is online and monitoring Ticketmaster resale events!");
 
-  // Run immediately on startup
   await checkAllEvents(ticketChannel);
 
-  // Every 5 minutes
-  cron.schedule(
-    "*/5 * * * *",
-    async () => {
-      await checkAllEvents(ticketChannel);
-    },
-    { timezone: "Europe/London" }
-  );
+  // Every N minutes (timezone not needed for minute-based)
+  cron.schedule(`*/${CHECK_CRON_EVERY_MINUTES} * * * *`, async () => {
+    await checkAllEvents(ticketChannel);
+  });
 
-  // Every hour
+  // Hourly log (timezone matters)
   cron.schedule(
     "0 * * * *",
     async () => {
@@ -328,8 +280,6 @@ client.once("ready", async () => {
     },
     { timezone: "Europe/London" }
   );
-
-  console.log("Schedulers started ✅");
 });
 
 client.login(process.env.DISCORD_TOKEN);
