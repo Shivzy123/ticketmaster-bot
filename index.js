@@ -21,14 +21,14 @@ const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
 const DAILY_REPORT_CHANNEL_ID = "1473945399919378524";
 
 // ✅ Daily report time (UK)
-const DAILY_REPORT_TIME_UK_HOUR = 10;     // ✅ 10am UK
-const DAILY_REPORT_TIME_UK_MINUTE = 32;    // ✅ :00
+const DAILY_REPORT_TIME_UK_HOUR = 11;     // ✅ 10am UK
+const DAILY_REPORT_TIME_UK_MINUTE = 6;    // ✅ :00
 
 const ALLOW_DAILY_REPORT = true;          // ✅ toggle daily report on/off
 const RUN_DAILY_REPORT_ON_STARTUP = false; // ✅ set true to test immediately on deploy
 
 // ✅ Daily report filters (report-only)
-const DAILY_REPORT_MAX_PRICE_GBP = 1000;
+const DAILY_REPORT_MAX_PRICE_GBP = 5000;
 const DAILY_REPORT_MIN_LISTINGS = 1;
 
 // ✅ Debug + retry options (no Railway env vars needed)
