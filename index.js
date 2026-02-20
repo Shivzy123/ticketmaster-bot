@@ -57,7 +57,7 @@ const EVENTS = {
     date: "Sat 18th July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-18"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
@@ -65,7 +65,7 @@ const EVENTS = {
     date: "Sun 19th July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-19"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
@@ -73,7 +73,7 @@ const EVENTS = {
     date: "Wed 22nd July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-22"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
@@ -81,7 +81,7 @@ const EVENTS = {
     date: "Fri 24th July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-24"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
@@ -89,7 +89,7 @@ const EVENTS = {
     date: "Sat 25th July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-25"
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
@@ -97,7 +97,7 @@ const EVENTS = {
     date: "Tue 28th July",
     location: "London",
     maxPrice: 600,
-    minTickets: 2,
+    minTickets: 1,
     enabledUntil: "2026-07-28"
   }
 };
