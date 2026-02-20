@@ -56,7 +56,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-18"
   },
@@ -64,7 +64,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-19"
   },
@@ -72,7 +72,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-22"
   },
@@ -80,7 +80,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-24"
   },
@@ -88,7 +88,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-25"
   },
@@ -96,7 +96,7 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 250,
+    maxPrice: 600,
     minTickets: 2,
     enabledUntil: "2026-07-28"
   }
