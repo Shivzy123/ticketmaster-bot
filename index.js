@@ -1,5 +1,10 @@
 require("dotenv").config();
 
+if (!process.env.DISCORD_TOKEN || !process.env.CHANNEL_ID || !process.env.TIME_CHECK_CHANNEL_ID) {
+  console.error("Missing env vars. Check .env: DISCORD_TOKEN, CHANNEL_ID, TIME_CHECK_CHANNEL_ID");
+  process.exit(1);
+}
+
 console.log("DISCORD_TOKEN:", process.env.DISCORD_TOKEN ? "SET" : "NOT SET");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID ? "SET" : "NOT SET");
 
@@ -12,7 +17,7 @@ const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { checkResale, cleanUrl } = require("./checker");
 const cron = require("node-cron");
 
-const TIME_CHECK_CHANNEL_ID = "1465346769490809004";
+const TIME_CHECK_CHANNEL_ID = process.env.TIME_CHECK_CHANNEL_ID;
 
 // If you want screenshots/HTML when blocked:
 process.env.SAVE_BLOCKED_DUMPS = process.env.SAVE_BLOCKED_DUMPS || "true";
@@ -35,49 +40,49 @@ const EVENTS = {
     artist: "Bruno Mars",
     date: "Sat 18th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-18",
-    minTickets: 1
+    minTickets: 2
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-19-07-2026/event/23006427C8FF0D82": {
     artist: "Bruno Mars",
     date: "Sun 19th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-19",
-    minTickets: 1
+    minTickets: 2
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-22-07-2026/event/23006427F6C10F5B": {
     artist: "Bruno Mars",
     date: "Wed 22nd July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-22",
-    minTickets: 1
+    minTickets: 2
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-24-07-2026/event/23006427F78F0F67": {
     artist: "Bruno Mars",
     date: "Fri 24th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-24",
-    minTickets: 1
+    minTickets: 2
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-25-07-2026/event/23006427F8750F70": {
     artist: "Bruno Mars",
     date: "Sat 25th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-25",
-    minTickets: 1
+    minTickets: 2
   },
   "https://www.ticketmaster.co.uk/bruno-mars-the-romantic-tour-london-28-07-2026/event/23006427FA0D0F8E": {
     artist: "Bruno Mars",
     date: "Tue 28th July",
     location: "London",
-    maxPrice: 2000,
+    maxPrice: 150,
     enabledUntil: "2026-07-28",
-    minTickets: 1
+    minTickets: 2
   }
 };
 
